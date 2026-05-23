@@ -1,0 +1,21 @@
+{
+  "_comment": "Words that stay lowercase when they appear mid-title (never at position 0). Matches AniList/AniDB human-curated romaji conventions. Edit freely — the file is hot-reloaded on each run.",
+
+  "japanese_particles": [
+    "no",   "ni",  "wa",  "ga",  "wo",  "o",
+    "to",   "de",  "ka",  "na",  "mo",  "ya",
+    "e",    "ha",  "yo",  "ne",  "sa",  "zo",
+    "ze",   "na",  "toka","nado","demo","dake",
+    "shika","made","kara","yori","hodo","gurai",
+    "bakari","nomi","sae", "sura","nara","temo",
+    "ba",   "te",  "shi", "node","ので","kedo",
+    "ga",   "keredo","keredomo","noni","mono"
+  ],
+
+  "english_articles_prepositions": [
+    "a",  "an", "the",
+    "at", "by", "for", "in", "of", "on", "or", "up",
+    "and","as", "but","nor","so", "yet",
+    "via","vs"
+  ]
+}
