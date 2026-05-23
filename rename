@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# rename — run jellyfin_renamer.py from any directory
+#
+# Install (once):
+#   chmod +x rename
+#   sudo ln -s "$(pwd)/rename" /usr/local/bin/rename
+#   # or add the project folder to your PATH
+#
+# Usage:
+#   rename                          # interactive menu, MEDIA_DIR from .env
+#   rename --path .                 # interactive menu, current directory
+#   rename --path /mnt/D/Torrent/X  # interactive menu, specific folder
+#   rename --path . --dry-run       # preview only
+#   rename --path . --run           # live rename, no menu
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+exec uv run --project "$SCRIPT_DIR" "$SCRIPT_DIR/jellyfin_renamer.py" "$@"
