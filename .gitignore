@@ -10,3 +10,6 @@ wheels/
 .venv
 .env
 *.log*
+
+# Series cache (per-folder)
+.series_cache.json

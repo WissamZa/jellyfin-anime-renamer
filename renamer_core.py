@@ -16,7 +16,8 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from enum import Enum
+from typing import Callable, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -208,6 +209,24 @@ class Romaniser:
 _romaniser = Romaniser()
 
 
+# ═══════════════════════ PROVIDERS ═════════════════════
+class Provider(str, Enum):
+    """
+    Metadata provider for episode data.
+
+    TMDB    — The Movie Database (requires API key, best season/episode data)
+    AniList — Free GraphQL API (no key needed, human-curated romaji titles)
+    """
+    TMDB = "tmdb"
+    AniList = "anilist"
+
+    @classmethod
+    def from_str(cls, value: str) -> "Provider":
+        """Parse a provider string (case-insensitive). Falls back to TMDB."""
+        mapping = {"tmdb": cls.TMDB, "anilist": cls.AniList}
+        return mapping.get(value.strip().lower(), cls.TMDB)
+
+
 # ═══════════════════════ CONFIGURATION ══════════════════
 class Config:
     """
@@ -225,28 +244,51 @@ class Config:
         anilist_id: Optional[int] = None,
         media_dir: Optional[Path] = None,
         organize_into_folders: Optional[bool] = None,
+        provider: Optional[Provider] = None,
     ):
         self.TMDB_API_KEY = tmdb_api_key or os.getenv("TMDB_API_KEY", "").strip()
-        self.SERIES_NAME = (
-            series_name or os.getenv("SERIES_NAME", "").strip() or "One Piece"
-        )
-        self.TMDB_SERIES_ID = (
+
+        # Resolve MEDIA_DIR first so we can derive series name from it
+        raw_media_dir = os.getenv("MEDIA_DIR", "").strip()
+        self.MEDIA_DIR = media_dir or Path(raw_media_dir if raw_media_dir else ".")
+
+        # Series name priority: explicit parameter > env var > folder name
+        env_series = os.getenv("SERIES_NAME", "").strip()
+        if series_name:
+            self.SERIES_NAME = series_name
+        elif env_series:
+            self.SERIES_NAME = env_series
+        else:
+            # Derive from the media directory's folder name
+            self.SERIES_NAME = self.MEDIA_DIR.resolve().name
+            if self.SERIES_NAME == ".":
+                self.SERIES_NAME = os.getcwd().rsplit(os.sep, 1)[-1]
+
+        # TMDB series ID: explicit parameter > env var > None (resolved later via search)
+        self.TMDB_SERIES_ID: Optional[int] = (
             tmdb_series_id
             if tmdb_series_id is not None
             else self._parse_tmdb_series_id(os.getenv("TMDB_SERIES_ID", ""))
         )
+
         self.ANILIST_ID: Optional[int] = (
             anilist_id
             if anilist_id is not None
             else self._parse_anilist_id(os.getenv("ANILIST_ID", ""))
         )
-        raw_media_dir = os.getenv("MEDIA_DIR", "").strip()
-        self.MEDIA_DIR = media_dir or Path(raw_media_dir if raw_media_dir else ".")
         self.ORGANIZE_INTO_FOLDERS = (
             organize_into_folders
             if organize_into_folders is not None
             else os.getenv("ORGANIZE_INTO_FOLDERS", "true").lower() == "true"
         )
+
+        # Provider: which API to use as primary episode data source
+        # Priority: explicit parameter > env var > TMDB (default)
+        if provider is not None:
+            self.PROVIDER = provider
+        else:
+            env_provider = os.getenv("PROVIDER", "").strip()
+            self.PROVIDER = Provider.from_str(env_provider) if env_provider else Provider.TMDB
 
         # Naming templates (not overridable at runtime — change in .env or here)
         self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
@@ -265,22 +307,23 @@ class Config:
         return self.MEDIA_DIR / "rename_history.json"
 
     @staticmethod
-    def _parse_tmdb_series_id(raw: str) -> int:
+    def _parse_tmdb_series_id(raw: str) -> Optional[int]:
         """
         Safely parse TMDB_SERIES_ID from env.
-        Defaults to 37854 (One Piece) if the value is missing or blank.
+        Returns None if the value is missing or blank — the ID will be
+        resolved automatically via TMDB search from the series name.
         """
         val = raw.strip()
         if not val:
-            return 37854
+            return None
         try:
             return int(val)
         except ValueError:
             log.warning(
-                "TMDB_SERIES_ID in .env is not a valid integer: '%s' — using default 37854",
+                "TMDB_SERIES_ID in .env is not a valid integer: '%s' — will auto-resolve via search",
                 val,
             )
-            return 37854
+            return None
 
     @staticmethod
     def _parse_anilist_id(raw: str) -> Optional[int]:
@@ -303,8 +346,8 @@ class Config:
 
     def validate(self) -> list[str]:
         errors = []
-        if not self.TMDB_API_KEY:
-            errors.append("TMDB_API_KEY is not set. Add it to your .env file.")
+        if self.PROVIDER == Provider.TMDB and not self.TMDB_API_KEY:
+            errors.append("TMDB_API_KEY is not set. Add it to your .env file (required for TMDB provider).")
         if not self.MEDIA_DIR.exists():
             errors.append(f"MEDIA_DIR does not exist: {self.MEDIA_DIR}")
         return errors
@@ -580,12 +623,16 @@ class AniListFetcher(EpisodeFetcher):
     Fetches series and episode data from AniList's free GraphQL API.
     Returns the official romaji title directly — no mechanical conversion.
     Used both as a fallback fetcher and as a romaji cross-reference.
+
+    When used as the primary provider, AniList resolves the series name
+    and fetches episode titles without needing TMDB at all.  No API key
+    is required — the GraphQL endpoint is free and unauthenticated.
     """
 
     name = "AniList"
     URL = "https://graphql.anilist.co"
 
-    # Fetches: romaji/english/native titles + episode list
+    # Fetches: romaji/english/native titles + episode count
     SERIES_QUERY = """
     query ($id: Int, $search: String) {
       Media(id: $id, search: $search, type: ANIME) {
@@ -596,6 +643,10 @@ class AniListFetcher(EpisodeFetcher):
           native
         }
         episodes
+        format
+        status
+        startDate { year month day }
+        endDate { year month day }
       }
     }
     """
@@ -606,6 +657,22 @@ class AniListFetcher(EpisodeFetcher):
       Media(id: $id, type: ANIME) {
         streamingEpisodes {
           title
+        }
+      }
+    }
+    """
+
+    # Full episode list with airing schedule for better season data
+    AIRING_QUERY = """
+    query ($id: Int, $page: Int) {
+      Media(id: $id, type: ANIME) {
+        id
+        airingSchedule(page: $page, perPage: 50) {
+          pageInfo { hasNextPage }
+          nodes {
+            episode
+            airingAt
+          }
         }
       }
     }
@@ -658,6 +725,56 @@ class AniListFetcher(EpisodeFetcher):
         )
         return romaji or english
 
+    def find_series(self, name: str) -> Optional[tuple[int, str]]:
+        """
+        Search AniList by name and return (anilist_id, romaji_name).
+
+        This is the AniList equivalent of TMDBSearch.find() — it resolves
+        a search string to a series ID and the best title for renaming.
+
+        Priority for the series name:
+          1. AniList romaji title (human-curated, most accurate for anime)
+          2. AniList english title (fallback)
+
+        Returns None if the search fails or returns no results.
+        """
+        media = self._gql(self.SERIES_QUERY, {"search": name})
+        if not media:
+            log.warning("AniList search for '%s' returned no results.", name)
+            return None
+
+        anilist_id = media.get("id")
+        if not anilist_id:
+            return None
+
+        # Cache the resolved ID so fetch() can use it without a second request
+        if not self._id:
+            self._id = anilist_id
+
+        titles = media.get("title", {})
+        romaji = titles.get("romaji")
+        english = titles.get("english")
+        native = titles.get("native")
+
+        # Prefer romaji — it is the standard for anime file naming
+        chosen = romaji or english
+        if not chosen:
+            return None
+
+        # Apply anime_title_case for consistency (particles, capitalisation)
+        chosen = anime_title_case(chosen)
+
+        log.info(
+            "AniList find_series '%s' → id=%d romaji='%s' english='%s' native='%s' → '%s'",
+            name,
+            anilist_id,
+            romaji,
+            english,
+            native,
+            chosen,
+        )
+        return anilist_id, chosen
+
     def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
         if not self._id:
             return None
@@ -668,7 +785,8 @@ class AniListFetcher(EpisodeFetcher):
 
         streaming = media.get("streamingEpisodes", [])
         if not streaming:
-            return None
+            log.info("AniList: no streaming episodes found for id=%d — using airing schedule", self._id)
+            return self._fetch_from_airing_schedule()
 
         mapping: dict[int, EpisodeInfo] = {}
         for idx, ep_data in enumerate(streaming, start=1):
@@ -684,6 +802,51 @@ class AniListFetcher(EpisodeFetcher):
             )
 
         log.info("AniList: mapped %d episode titles.", len(mapping))
+        return mapping
+
+    def _fetch_from_airing_schedule(self) -> Optional[dict[int, EpisodeInfo]]:
+        """
+        Fall back to the airing schedule when streamingEpisodes is empty.
+        This provides episode numbers and air dates but no titles.
+        """
+        page = 1
+        all_nodes: list[dict] = []
+
+        while True:
+            media = self._gql(self.AIRING_QUERY, {"id": self._id, "page": page})
+            if not media:
+                break
+            schedule = media.get("airingSchedule", {})
+            nodes = schedule.get("nodes", [])
+            all_nodes.extend(nodes)
+
+            has_next = schedule.get("pageInfo", {}).get("hasNextPage", False)
+            if not has_next:
+                break
+            page += 1
+
+        if not all_nodes:
+            return None
+
+        mapping: dict[int, EpisodeInfo] = {}
+        for node in all_nodes:
+            ep_num = node.get("episode", 0)
+            if ep_num <= 0:
+                continue
+            airing_at = node.get("airingAt", 0)
+            air_date = ""
+            if airing_at:
+                air_date = datetime.datetime.fromtimestamp(airing_at).strftime("%Y-%m-%d")
+            mapping[ep_num] = EpisodeInfo(
+                absolute=ep_num,
+                season=1,
+                episode=ep_num,
+                title=f"Episode {ep_num}",
+                air_date=air_date,
+                source=self.name,
+            )
+
+        log.info("AniList: mapped %d episodes from airing schedule.", len(mapping))
         return mapping
 
     def fetch_specials(self) -> dict[int, EpisodeInfo]:
@@ -941,6 +1104,103 @@ class EpisodeNumberParser:
         return None
 
 
+# ══════════════════════ SERIES CACHE ════════════════════
+class SeriesCache:
+    """
+    Per-folder cache for resolved series metadata.
+
+    After the first successful TMDB search for a folder, the resolved
+    series name, TMDB ID, and AniList ID are saved to a JSON file inside
+    the media directory.  Subsequent runs read from this file instead of
+    hitting TMDB / AniList / AniDB again.
+
+    The cache file is .series_cache.json, stored in the media directory.
+    It can be deleted manually to force a re-search.
+    """
+
+    FILENAME = ".series_cache.json"
+
+    # Fields we persist
+    _FIELDS = ("series_name", "tmdb_series_id", "anilist_id", "provider", "resolved_at")
+
+    def __init__(self, media_dir: Path):
+        self._path = media_dir / self.FILENAME
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> Optional[dict]:
+        """
+        Load cached series info from the media directory.
+        Returns None if the cache doesn't exist or is invalid.
+        """
+        if not self._path.exists():
+            return None
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Could not read series cache: %s", exc)
+            return None
+
+        # Basic validation — must have series_name and at least one ID field
+        if not isinstance(data, dict):
+            return None
+        if "series_name" not in data:
+            log.warning("Series cache is missing required fields — ignoring.")
+            return None
+        if "tmdb_series_id" not in data and "anilist_id" not in data:
+            log.warning("Series cache has no provider ID — ignoring.")
+            return None
+
+        provider_str = data.get("provider", "tmdb")
+        data["provider"] = Provider.from_str(provider_str)
+
+        log.info(
+            "Loaded series cache: '%s' (provider=%s, TMDB id=%s, AniList id=%s)",
+            data.get("series_name"),
+            data.get("provider").value,
+            data.get("tmdb_series_id"),
+            data.get("anilist_id"),
+        )
+        return data
+
+    def save(
+        self,
+        series_name: str,
+        provider: Provider = Provider.TMDB,
+        tmdb_series_id: Optional[int] = None,
+        anilist_id: Optional[int] = None,
+    ) -> None:
+        """
+        Persist resolved series metadata to the media directory.
+        """
+        data = {
+            "series_name": series_name,
+            "provider": provider.value,
+            "tmdb_series_id": tmdb_series_id,
+            "anilist_id": anilist_id,
+            "resolved_at": datetime.datetime.now().isoformat(),
+        }
+        try:
+            self._path.write_text(
+                json.dumps(data, indent=4, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            log.info("Saved series cache → %s", self._path)
+        except OSError as exc:
+            log.warning("Could not save series cache: %s", exc)
+
+    def clear(self) -> None:
+        """Delete the cache file so the next run re-searches."""
+        if self._path.exists():
+            try:
+                self._path.unlink()
+                log.info("Deleted series cache: %s", self._path)
+            except OSError as exc:
+                log.warning("Could not delete series cache: %s", exc)
+
+
 # ═══════════════════════ HISTORY ═════════════════════════
 class RenameHistory:
     def __init__(self, path: Path):
@@ -989,7 +1249,7 @@ class AnimeRenamer:
     def __init__(
         self,
         cfg: Config,
-        rename_via_qbit: Optional[callable] = None,
+        rename_via_qbit: Optional[Callable] = None,
     ):
         self._cfg = cfg
         self._history = RenameHistory(cfg.history_file)
@@ -1006,11 +1266,63 @@ class AnimeRenamer:
                 log.error("Config error: %s", e)
             return []
 
-        fetcher = TMDBFetcher(
-            self._cfg.TMDB_API_KEY,
-            self._cfg.TMDB_SERIES_ID,
-            self._cfg,
+        cache = SeriesCache(self._cfg.MEDIA_DIR)
+
+        # ── Step 1: Try loading from folder cache ──────────────────
+        needs_resolve = (
+            (self._cfg.PROVIDER == Provider.TMDB and self._cfg.TMDB_SERIES_ID is None)
+            or (self._cfg.PROVIDER == Provider.AniList and self._cfg.ANILIST_ID is None)
         )
+
+        if needs_resolve:
+            cached = cache.load()
+            if cached:
+                # Apply cached values — provider-aware
+                cached_provider = cached.get("provider", Provider.TMDB)
+                self._cfg.SERIES_NAME = cached["series_name"]
+                if cached.get("tmdb_series_id"):
+                    self._cfg.TMDB_SERIES_ID = cached["tmdb_series_id"]
+                if cached.get("anilist_id"):
+                    self._cfg.ANILIST_ID = cached["anilist_id"]
+                # If the cached provider differs from the current one, switch
+                if cached_provider != self._cfg.PROVIDER:
+                    log.info(
+                        "Cache provider (%s) differs from configured (%s) — switching to cached",
+                        cached_provider.value,
+                        self._cfg.PROVIDER.value,
+                    )
+                    self._cfg.PROVIDER = cached_provider
+
+                log.info(
+                    "Series cache hit → '%s' (provider=%s, TMDB id=%s, AniList id=%s) — skipping API search",
+                    self._cfg.SERIES_NAME,
+                    self._cfg.PROVIDER.value,
+                    self._cfg.TMDB_SERIES_ID,
+                    self._cfg.ANILIST_ID,
+                )
+                needs_resolve = False
+
+        # ── Step 2: If still unresolved, search using the selected provider ─
+        if needs_resolve or (
+            self._cfg.PROVIDER == Provider.TMDB and self._cfg.TMDB_SERIES_ID is None
+        ) or (
+            self._cfg.PROVIDER == Provider.AniList and self._cfg.ANILIST_ID is None
+        ):
+            if self._cfg.PROVIDER == Provider.AniList:
+                self._resolve_via_anilist(cache)
+            else:
+                self._resolve_via_tmdb(cache)
+
+        # ── Step 3: Build the episode map using the selected provider ──────
+        if self._cfg.PROVIDER == Provider.AniList:
+            fetcher = AniListFetcher(anime_id=self._cfg.ANILIST_ID)
+        else:
+            fetcher = TMDBFetcher(
+                self._cfg.TMDB_API_KEY,
+                self._cfg.TMDB_SERIES_ID,
+                self._cfg,
+            )
+
         episode_map = fetcher.fetch()
         specials_map = fetcher.fetch_specials()
 
@@ -1050,6 +1362,94 @@ class AnimeRenamer:
 
         self._history.clear_entries(restored_keys)
         log.info("Restored %d file(s). Skipped %d.", restored, skipped_count)
+
+    def _resolve_via_tmdb(self, cache: SeriesCache) -> None:
+        """
+        Resolve series metadata using TMDB as the primary provider.
+        Searches TMDB for the series name, then cross-references with
+        AniList/AniDB for the best romaji title.
+        """
+        log.info(
+            "No cache found — searching TMDB for '%s' …",
+            self._cfg.SERIES_NAME,
+        )
+        searcher = TMDBSearch(self._cfg.TMDB_API_KEY)
+        result = searcher.find(self._cfg.SERIES_NAME)
+        if not result:
+            log.error(
+                "Could not find '%s' on TMDB — aborting.",
+                self._cfg.SERIES_NAME,
+            )
+            return
+        tmdb_id, romaji_name = result
+        self._cfg.TMDB_SERIES_ID = tmdb_id
+        self._cfg.SERIES_NAME = romaji_name
+        log.info(
+            "Resolved via TMDB → ID: %d  Series name: '%s'",
+            tmdb_id,
+            romaji_name,
+        )
+
+        # Also resolve AniList ID if not set (for cache completeness)
+        if self._cfg.ANILIST_ID is None:
+            al = AniListFetcher()
+            al_id = al.find_id(self._cfg.SERIES_NAME)
+            if al_id:
+                self._cfg.ANILIST_ID = al_id
+
+        # Save to cache so next run skips the search
+        cache.save(
+            series_name=romaji_name,
+            provider=Provider.TMDB,
+            tmdb_series_id=tmdb_id,
+            anilist_id=self._cfg.ANILIST_ID,
+        )
+
+    def _resolve_via_anilist(self, cache: SeriesCache) -> None:
+        """
+        Resolve series metadata using AniList as the primary provider.
+        Searches AniList for the series name and returns the romaji title.
+        No API key is required — AniList's GraphQL endpoint is free.
+        """
+        log.info(
+            "No cache found — searching AniList for '%s' …",
+            self._cfg.SERIES_NAME,
+        )
+        al = AniListFetcher()
+        result = al.find_series(self._cfg.SERIES_NAME)
+        if not result:
+            log.error(
+                "Could not find '%s' on AniList — aborting.",
+                self._cfg.SERIES_NAME,
+            )
+            return
+        anilist_id, romaji_name = result
+        self._cfg.ANILIST_ID = anilist_id
+        self._cfg.SERIES_NAME = romaji_name
+        log.info(
+            "Resolved via AniList → ID: %d  Series name: '%s'",
+            anilist_id,
+            romaji_name,
+        )
+
+        # Also try to resolve TMDB ID if not set (for cache completeness)
+        if self._cfg.TMDB_SERIES_ID is None and self._cfg.TMDB_API_KEY:
+            try:
+                searcher = TMDBSearch(self._cfg.TMDB_API_KEY)
+                tmdb_result = searcher.find(self._cfg.SERIES_NAME)
+                if tmdb_result:
+                    self._cfg.TMDB_SERIES_ID = tmdb_result[0]
+                    log.info("Also resolved TMDB ID: %d", self._cfg.TMDB_SERIES_ID)
+            except Exception:
+                pass  # Non-critical — TMDB is not the primary provider
+
+        # Save to cache so next run skips the search
+        cache.save(
+            series_name=romaji_name,
+            provider=Provider.AniList,
+            tmdb_series_id=self._cfg.TMDB_SERIES_ID,
+            anilist_id=anilist_id,
+        )
 
     # ── internals ────────────────────────────────────────
     def _season_folder(self, season: int) -> Path:

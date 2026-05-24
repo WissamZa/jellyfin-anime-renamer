@@ -34,6 +34,8 @@ import os
 from renamer_core import (
     AnimeRenamer,
     Config,
+    Provider,
+    SeriesCache,
     TMDBFetcher,
     TMDBSearch,
     get_logger,
@@ -46,6 +48,8 @@ QBIT_URL = os.getenv("QBIT_URL", "http://localhost:8080")
 QBIT_USERNAME = os.getenv("QBIT_USERNAME", "")
 QBIT_PASSWORD = os.getenv("QBIT_PASSWORD", "")
 BASE_DOWNLOAD_PATH = Path(os.getenv("BASE_DOWNLOAD_PATH", "/mnt/D/Torrent"))
+# Provider: "tmdb" (default) or "anilist" (free, no API key needed)
+ACTIVE_PROVIDER = Provider.from_str(os.getenv("PROVIDER", "tmdb"))
 
 # Regex to extract series name from a typical fansub torrent title:
 # "[SubGroup] Series Name (2024) - 1100 [1080p]"  →  "Series Name"
@@ -237,6 +241,7 @@ def build_qbit_renamer(
         tmdb_series_id=tmdb_id,
         media_dir=series_folder,
         organize_into_folders=True,
+        provider=ACTIVE_PROVIDER,
     )
 
     # Mutable list so the closure can refresh it after each rename
@@ -313,47 +318,77 @@ def process_torrent(qbit: QBitClient, torrent_hash: str, torrent_name: str) -> N
 
     log.info("Series name: %s", series_name)
 
-    # ── 3. Search TMDB for series ID ──────────────────────
-    searcher = TMDBSearch(os.getenv("TMDB_API_KEY", ""))
+    # ── 3. Search for series ID using the configured provider ──
+    if ACTIVE_PROVIDER == Provider.AniList:
+        from renamer_core import AniListFetcher
+        al = AniListFetcher()
+        al_result = al.find_series(series_name)
+        if not al_result:
+            log.error("AniList search returned nothing for '%s' — skipping.", series_name)
+            return
+        anilist_id, official_name = al_result
+        tmdb_id = None
+        # Also try to resolve TMDB ID for cache completeness
+        if os.getenv("TMDB_API_KEY", ""):
+            try:
+                searcher = TMDBSearch(os.getenv("TMDB_API_KEY", ""))
+                tmdb_result = searcher.find(series_name)
+                if tmdb_result:
+                    tmdb_id = tmdb_result[0]
+            except Exception:
+                pass
+        log.info("AniList match: id=%d name='%s'", anilist_id, official_name)
+    else:
+        # TMDB (default)
+        searcher = TMDBSearch(os.getenv("TMDB_API_KEY", ""))
 
-    # Try multiple search strategies
-    search_variants = [
-        series_name,  # Original name
-        re.sub(
-            r"\s*(?:2nd|3rd|\d+st|\d+nd|\d+rd|\d+th)\s*Season\s*$",
-            "",
-            series_name,
-            flags=re.IGNORECASE,
-        ),  # Remove season suffix
-        re.sub(
-            r"\s*Season\s*\d+\s*$", "", series_name, flags=re.IGNORECASE
-        ),  # Remove "Season 2" etc.
-        re.sub(r"\s*-\s*\d+.*$", "", series_name),  # Remove trailing numbers and tags
-    ]
+        # Try multiple search strategies
+        search_variants = [
+            series_name,  # Original name
+            re.sub(
+                r"\s*(?:2nd|3rd|\d+st|\d+nd|\d+rd|\d+th)\s*Season\s*$",
+                "",
+                series_name,
+                flags=re.IGNORECASE,
+            ),  # Remove season suffix
+            re.sub(
+                r"\s*Season\s*\d+\s*$", "", series_name, flags=re.IGNORECASE
+            ),  # Remove "Season 2" etc.
+            re.sub(r"\s*-\s*\d+.*$", "", series_name),  # Remove trailing numbers and tags
+        ]
 
-    result = None
-    for i, search_term in enumerate(search_variants):
-        if search_term != series_name:
-            log.info("Trying search variant %d: '%s'", i + 1, search_term)
-        result = searcher.find(search_term)
-        if result:
-            break
+        result = None
+        for i, search_term in enumerate(search_variants):
+            if search_term != series_name:
+                log.info("Trying search variant %d: '%s'", i + 1, search_term)
+            result = searcher.find(search_term)
+            if result:
+                break
 
-    if not result:
-        log.error(
-            "TMDB search returned nothing for '%s' (tried %d variants) — skipping.",
-            series_name,
-            len(search_variants),
-        )
-        return
+        if not result:
+            log.error(
+                "TMDB search returned nothing for '%s' (tried %d variants) — skipping.",
+                series_name,
+                len(search_variants),
+            )
+            return
 
-    tmdb_id, official_name = result
-    log.info("TMDB match: id=%d name='%s'", tmdb_id, official_name)
+        tmdb_id, official_name = result
+        anilist_id = None
+        log.info("TMDB match: id=%d name='%s'", tmdb_id, official_name)
 
     # ── 4. Determine & create the series folder ───────────
     series_folder = BASE_DOWNLOAD_PATH / sanitize(official_name)
     series_folder.mkdir(parents=True, exist_ok=True)
     log.info("Series folder: %s", series_folder)
+
+    # Save cache so next run on this folder skips the search
+    SeriesCache(series_folder).save(
+        series_name=official_name,
+        provider=ACTIVE_PROVIDER,
+        tmdb_series_id=tmdb_id,
+        anilist_id=anilist_id,
+    )
 
     # ── 5. Move the torrent's save location in qBit ───────
     log.info("Moving torrent save path to: %s", series_folder)
@@ -365,7 +400,7 @@ def process_torrent(qbit: QBitClient, torrent_hash: str, torrent_name: str) -> N
     time.sleep(3)
 
     # ── 6. Rename & organise via the renamer ──────────────
-    log.info("Starting renamer on: %s", series_folder)
+    log.info("Starting renamer on: %s (provider=%s)", series_folder, ACTIVE_PROVIDER.value)
     renamer = build_qbit_renamer(
         qbit, torrent_hash, series_folder, tmdb_id, official_name
     )
