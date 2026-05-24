@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
 """
 ╔══════════════════════════════════════════════════════╗
 ║        🏴‍☠️  JELLYFIN ANIME RENAMER  🏴‍☠️              ║
@@ -56,6 +56,7 @@ _env_file = _SCRIPT_DIR / ".env"
 if _env_file.exists():
     try:
         from dotenv import load_dotenv
+
         load_dotenv(_env_file, override=False)
     except ImportError:
         pass  # dotenv not yet available; renamer_core will load it
@@ -109,9 +110,9 @@ def show_config(cfg: Config) -> None:
   Organise folders: {org}
   Season folder   : {cfg.SEASON_FOLDER_TEMPLATE.format(season=1)}  (example)
   Specials folder : {cfg.SPECIALS_FOLDER_NAME}
-  Extensions      : {', '.join(cfg.VIDEO_EXTENSIONS)}
+  Extensions      : {", ".join(cfg.VIDEO_EXTENSIONS)}
   History         : {cfg.history_file}
-  Log file        : {_SCRIPT_DIR / 'renamer.log'}""")
+  Log file        : {_SCRIPT_DIR / "renamer.log"}""")
 
 
 def interactive_menu(cfg: Config) -> None:
@@ -170,7 +171,8 @@ examples:
 """,
     )
     parser.add_argument(
-        "--path", "-p",
+        "--path",
+        "-p",
         type=Path,
         default=None,
         metavar="DIR",
@@ -179,12 +181,14 @@ examples:
     # Mutually exclusive non-interactive modes
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
-        "--dry-run", "-d",
+        "--dry-run",
+        "-d",
         action="store_true",
         help="preview renames without touching files, then exit",
     )
     mode.add_argument(
-        "--run", "-r",
+        "--run",
+        "-r",
         action="store_true",
         help="rename and organise files immediately, then exit (no menu)",
     )
@@ -193,7 +197,7 @@ examples:
 
 def main() -> None:
     args = parse_args()
-    cfg  = build_config(args.path)
+    cfg = build_config(args.path)
 
     # ── Non-interactive modes (--dry-run / --run) ─────────
     if args.dry_run:

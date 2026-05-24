@@ -12,7 +12,12 @@
 #   rename --path /mnt/D/Torrent/X  # interactive menu, specific folder
 #   rename --path . --dry-run       # preview only
 #   rename --path . --run           # live rename, no menu
-
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-exec uv run --project "$SCRIPT_DIR" "$SCRIPT_DIR/jellyfin_renamer.py" "$@"
+# Grab the target script name from the first argument
+TARGET_SCRIPT="$1"
+
+# Remove the script name from the argument list ($@)
+shift
+
+exec uv run --project "$SCRIPT_DIR" "$SCRIPT_DIR/$TARGET_SCRIPT" "$@"

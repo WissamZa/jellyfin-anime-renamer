@@ -22,10 +22,10 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Optional  # needed at module level for torrent_info hint
 
 import requests
 from dotenv import load_dotenv
-from typing import Optional   # needed at module level for torrent_info hint
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -42,16 +42,14 @@ from renamer_core import (
 log = get_logger("qbit_hook")
 
 # ═══════════════════════ CONFIG ══════════════════════════
-QBIT_URL           = os.getenv("QBIT_URL",           "http://localhost:8080")
-QBIT_USERNAME      = os.getenv("QBIT_USERNAME",       "")
-QBIT_PASSWORD      = os.getenv("QBIT_PASSWORD",       "")
+QBIT_URL = os.getenv("QBIT_URL", "http://localhost:8080")
+QBIT_USERNAME = os.getenv("QBIT_USERNAME", "")
+QBIT_PASSWORD = os.getenv("QBIT_PASSWORD", "")
 BASE_DOWNLOAD_PATH = Path(os.getenv("BASE_DOWNLOAD_PATH", "/mnt/D/Torrent"))
 
 # Regex to extract series name from a typical fansub torrent title:
 # "[SubGroup] Series Name (2024) - 1100 [1080p]"  →  "Series Name"
-TITLE_PATTERN = re.compile(
-    r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+"
-)
+TITLE_PATTERN = re.compile(r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+")
 
 
 def sanitize(name: str) -> str:
@@ -64,7 +62,7 @@ class QBitClient:
 
     def __init__(self, url: str, username: str, password: str):
         self._url = url.rstrip("/")
-        self._s   = requests.Session()
+        self._s = requests.Session()
         self._login(username, password)
 
     def _login(self, username: str, password: str) -> None:
@@ -75,9 +73,7 @@ class QBitClient:
                 timeout=10,
             )
             if r.status_code not in (200, 204):
-                log.error(
-                    "qBit login failed — status %s: %s", r.status_code, r.text
-                )
+                log.error("qBit login failed — status %s: %s", r.status_code, r.text)
                 sys.exit(1)
             log.info("Logged into qBittorrent at %s", self._url)
         except requests.exceptions.RequestException as e:
@@ -95,9 +91,7 @@ class QBitClient:
             log.error("setLocation failed — status %s", r.status_code)
         return ok
 
-    def rename_file(
-        self, torrent_hash: str, old_path: str, new_path: str
-    ) -> bool:
+    def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> bool:
         """
         Rename a single file inside a torrent.
         Paths are relative to the torrent's save location.
@@ -106,7 +100,7 @@ class QBitClient:
         r = self._s.post(
             f"{self._url}/api/v2/torrents/renameFile",
             data={
-                "hash":    torrent_hash,
+                "hash": torrent_hash,
                 "oldPath": old_path,
                 "newPath": new_path,
             },
@@ -115,7 +109,9 @@ class QBitClient:
         if not ok:
             log.error(
                 "renameFile failed — status %s | %s → %s",
-                r.status_code, old_path, new_path,
+                r.status_code,
+                old_path,
+                new_path,
             )
         return ok
 
@@ -163,7 +159,7 @@ class QBitClient:
             sorted_torrents = sorted(
                 completed,
                 key=lambda t: max(t.get("completion_on", 0), t.get("added_on", 0)),
-                reverse=True
+                reverse=True,
             )
             return sorted_torrents[:limit]
         except Exception as e:
@@ -183,6 +179,7 @@ def lookup_nyaa_title(torrent_hash: str, fallback: str) -> str:
             timeout=10,
         )
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(r.text, "html.parser")
         if soup.h3:
             title = soup.h3.text.strip()
@@ -204,10 +201,10 @@ def extract_series_name(title: str) -> Optional[str]:
         return sanitize(m.group(1).split("(")[0].strip())
 
     # Fallback: strip leading [Group], trailing - NNN [tags]
-    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", title)   # remove [Group]
-    cleaned = re.sub(r"\s*-\s*\d+.*$",  "", cleaned)  # remove - 1100 …
+    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", title)  # remove [Group]
+    cleaned = re.sub(r"\s*-\s*\d+.*$", "", cleaned)  # remove - 1100 …
     cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)  # remove (2024)
-    result  = sanitize(cleaned)
+    result = sanitize(cleaned)
     if result:
         log.info("Extracted series name (fallback): %s", result)
         return result
@@ -235,18 +232,16 @@ def build_qbit_renamer(
       - Creates destination subdirectories on disk (qBit won't do that).
     """
     cfg = Config(
-        tmdb_api_key          = os.getenv("TMDB_API_KEY", ""),
-        series_name           = series_name,
-        tmdb_series_id        = tmdb_id,
-        media_dir             = series_folder,
-        organize_into_folders = True,
+        tmdb_api_key=os.getenv("TMDB_API_KEY", ""),
+        series_name=series_name,
+        tmdb_series_id=tmdb_id,
+        media_dir=series_folder,
+        organize_into_folders=True,
     )
 
     # Mutable list so the closure can refresh it after each rename
     _tracked: list[dict] = qbit.get_files(torrent_hash)
-    log.info(
-        "qBit is tracking %d file(s) for this torrent.", len(_tracked)
-    )
+    log.info("qBit is tracking %d file(s) for this torrent.", len(_tracked))
     for f in _tracked:
         log.debug("  tracked: %s", f["name"])
 
@@ -257,14 +252,18 @@ def build_qbit_renamer(
     def _qbit_path_for(filename: str) -> str:
         """
         Find the qBit-tracked relative path whose basename matches `filename`.
-        Falls back to the bare filename if no match is found (shouldn't happen).
         """
+        # Search all tracked files
         for f in _tracked:
-            if Path(f["name"]).name == filename:
+            # Match if the basename of the tracked file matches the basename of our file
+            # This handles both files in root and subdirectories correctly
+            if Path(f["name"]).name == Path(filename).name:
                 return f["name"]
-        log.warning(
-            "File '%s' not found in qBit tracking — using bare name.", filename
-        )
+
+        # DEBUG: log what we have
+        log.warning("Available in qBit: %s", [f["name"] for f in _tracked])
+
+        log.warning("File '%s' not found in qBit tracking — using bare name.", filename)
         return filename
 
     def rename_via_qbit(
@@ -279,7 +278,7 @@ def build_qbit_renamer(
         """
         # Look up the ACTUAL path qBit is tracking for this file
         old_rel_str = _qbit_path_for(old_path.name)
-        new_rel     = new_path.relative_to(series_folder)
+        new_rel = new_path.relative_to(series_folder)
         new_rel_str = str(new_rel)
 
         log.info("qBit renameFile: %s → %s", old_rel_str, new_rel_str)
@@ -289,9 +288,7 @@ def build_qbit_renamer(
 
         ok = qbit.rename_file(torrent_hash, old_rel_str, new_rel_str)
         if not ok:
-            raise RuntimeError(
-                f"qBit renameFile failed: {old_rel_str} → {new_rel_str}"
-            )
+            raise RuntimeError(f"qBit renameFile failed: {old_rel_str} → {new_rel_str}")
 
         # Refresh tracking so the next rename sees the updated path
         time.sleep(0.5)
@@ -318,9 +315,36 @@ def process_torrent(qbit: QBitClient, torrent_hash: str, torrent_name: str) -> N
 
     # ── 3. Search TMDB for series ID ──────────────────────
     searcher = TMDBSearch(os.getenv("TMDB_API_KEY", ""))
-    result   = searcher.find(series_name)
+
+    # Try multiple search strategies
+    search_variants = [
+        series_name,  # Original name
+        re.sub(
+            r"\s*(?:2nd|3rd|\d+st|\d+nd|\d+rd|\d+th)\s*Season\s*$",
+            "",
+            series_name,
+            flags=re.IGNORECASE,
+        ),  # Remove season suffix
+        re.sub(
+            r"\s*Season\s*\d+\s*$", "", series_name, flags=re.IGNORECASE
+        ),  # Remove "Season 2" etc.
+        re.sub(r"\s*-\s*\d+.*$", "", series_name),  # Remove trailing numbers and tags
+    ]
+
+    result = None
+    for i, search_term in enumerate(search_variants):
+        if search_term != series_name:
+            log.info("Trying search variant %d: '%s'", i + 1, search_term)
+        result = searcher.find(search_term)
+        if result:
+            break
+
     if not result:
-        log.error("TMDB search returned nothing for '%s' — skipping.", series_name)
+        log.error(
+            "TMDB search returned nothing for '%s' (tried %d variants) — skipping.",
+            series_name,
+            len(search_variants),
+        )
         return
 
     tmdb_id, official_name = result
@@ -347,12 +371,14 @@ def process_torrent(qbit: QBitClient, torrent_hash: str, torrent_name: str) -> N
     )
     results = renamer.run(dry_run=False)
 
-    done   = sum(1 for r in results if r.success)
+    done = sum(1 for r in results if r.success)
     errors = sum(1 for r in results if r.error)
 
     log.info(
         "Done — renamed %d file(s), %d error(s) | hash=%s",
-        done, errors, torrent_hash,
+        done,
+        errors,
+        torrent_hash,
     )
     log.info("=" * 60)
 
@@ -362,6 +388,22 @@ def main() -> None:
     # ── 1. Connect to qBittorrent ─────────────────────────
     qbit = QBitClient(QBIT_URL, QBIT_USERNAME, QBIT_PASSWORD)
 
+    if "-hash" in sys.argv:
+        try:
+            idx = sys.argv.index("-hash")
+            torrent_hash = sys.argv[idx + 1]
+            # Need to fetch the name since we only have the hash
+            info = qbit.torrent_info(torrent_hash)
+            if not info:
+                log.error("Could not find torrent with hash %s", torrent_hash)
+                sys.exit(1)
+            torrent_name = info["name"]
+            process_torrent(qbit, torrent_hash, torrent_name)
+            sys.exit(0)
+        except (ValueError, IndexError):
+            log.error("Invalid -hash argument. Usage: python qbit_hook.py -hash <hash>")
+            sys.exit(1)
+
     # ── 2. Parse arguments or fallback to the last completed torrent ──
     n_limit = None
     if "-n" in sys.argv:
@@ -369,13 +411,18 @@ def main() -> None:
             idx = sys.argv.index("-n")
             n_limit = int(sys.argv[idx + 1])
         except (ValueError, IndexError):
-            log.error("Invalid -n argument value. Usage: python qbit_hook.py -n <number>")
+            log.error(
+                "Invalid -n argument value. Usage: python qbit_hook.py -n <number>"
+            )
             sys.exit(1)
 
     if n_limit is not None or len(sys.argv) < 3:
         # Fallback / Batch mode
         limit = n_limit if n_limit is not None else 1
-        log.info("No explicit trigger arguments. Checking the last %d completed torrents...", limit)
+        log.info(
+            "No explicit trigger arguments. Checking the last %d completed torrents...",
+            limit,
+        )
         targets = qbit.get_last_completed_torrents(limit)
         if not targets:
             log.error("Could not find any completed torrents in qBittorrent.")

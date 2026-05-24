@@ -34,7 +34,7 @@ def get_logger(name: str = "renamer") -> logging.Logger:
     log file (5 × 1 MB). Call once per entry-point script.
     """
     logger = logging.getLogger(name)
-    if logger.handlers:          # already configured (e.g. re-imported)
+    if logger.handlers:  # already configured (e.g. re-imported)
         return logger
 
     logger.setLevel(logging.DEBUG)
@@ -76,12 +76,39 @@ def _load_lowercase_words() -> set[str]:
     try:
         data = json.loads(PARTICLES_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        log.warning("Could not load %s (%s) — using built-in fallback.", PARTICLES_FILE.name, exc)
-        return {"no", "ni", "wa", "ga", "wo", "to", "de", "ka", "na", "mo", "ya", "e",
-                "a", "an", "the", "at", "by", "for", "in", "of", "on", "or", "and"}
+        log.warning(
+            "Could not load %s (%s) — using built-in fallback.",
+            PARTICLES_FILE.name,
+            exc,
+        )
+        return {
+            "no",
+            "ni",
+            "wa",
+            "ga",
+            "wo",
+            "to",
+            "de",
+            "ka",
+            "na",
+            "mo",
+            "ya",
+            "e",
+            "a",
+            "an",
+            "the",
+            "at",
+            "by",
+            "for",
+            "in",
+            "of",
+            "on",
+            "or",
+            "and",
+        }
     words: set[str] = set()
     for key, lst in data.items():
-        if key.startswith("_"):          # skip comment keys
+        if key.startswith("_"):  # skip comment keys
             continue
         if isinstance(lst, list):
             words.update(w.lower().strip() for w in lst if isinstance(w, str))
@@ -135,6 +162,7 @@ class Romaniser:
     def __init__(self) -> None:
         try:
             import pykakasi
+
             self._kks = pykakasi.kakasi()
             self._available = True
         except ImportError:
@@ -160,7 +188,7 @@ class Romaniser:
         result = self._kks.convert(text)
         parts = []
         for item in result:
-            hep  = item["hepburn"].strip()
+            hep = item["hepburn"].strip()
             orig = item["orig"]
             if hep:
                 parts.append(hep)
@@ -191,15 +219,17 @@ class Config:
 
     def __init__(
         self,
-        tmdb_api_key:          Optional[str]  = None,
-        series_name:           Optional[str]  = None,
-        tmdb_series_id:        Optional[int]  = None,
-        anilist_id:            Optional[int]  = None,
-        media_dir:             Optional[Path] = None,
+        tmdb_api_key: Optional[str] = None,
+        series_name: Optional[str] = None,
+        tmdb_series_id: Optional[int] = None,
+        anilist_id: Optional[int] = None,
+        media_dir: Optional[Path] = None,
         organize_into_folders: Optional[bool] = None,
     ):
         self.TMDB_API_KEY = tmdb_api_key or os.getenv("TMDB_API_KEY", "").strip()
-        self.SERIES_NAME  = series_name  or os.getenv("SERIES_NAME", "").strip() or "One Piece"
+        self.SERIES_NAME = (
+            series_name or os.getenv("SERIES_NAME", "").strip() or "One Piece"
+        )
         self.TMDB_SERIES_ID = (
             tmdb_series_id
             if tmdb_series_id is not None
@@ -219,20 +249,16 @@ class Config:
         )
 
         # Naming templates (not overridable at runtime — change in .env or here)
-        self.NAME_TEMPLATE = (
-            "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
-        )
-        self.SPECIAL_TEMPLATE = (
-            "{series} - S00E{episode:02d} - {title}{ext}"
-        )
+        self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
+        self.SPECIAL_TEMPLATE = "{series} - S00E{episode:02d} - {title}{ext}"
         self.SEASON_FOLDER_TEMPLATE = "Season {season:02d}"
-        self.SPECIALS_FOLDER_NAME   = "Specials"
+        self.SPECIALS_FOLDER_NAME = "Specials"
 
         self.VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm")
-        self.REQUEST_TIMEOUT  = 15
-        self.MAX_WORKERS      = 8
-        self.RETRY_ATTEMPTS   = 3
-        self.RETRY_DELAY      = 1.5
+        self.REQUEST_TIMEOUT = 15
+        self.MAX_WORKERS = 8
+        self.RETRY_ATTEMPTS = 3
+        self.RETRY_DELAY = 1.5
 
     @property
     def history_file(self) -> Path:
@@ -250,7 +276,10 @@ class Config:
         try:
             return int(val)
         except ValueError:
-            log.warning("TMDB_SERIES_ID in .env is not a valid integer: '%s' — using default 37854", val)
+            log.warning(
+                "TMDB_SERIES_ID in .env is not a valid integer: '%s' — using default 37854",
+                val,
+            )
             return 37854
 
     @staticmethod
@@ -266,7 +295,10 @@ class Config:
         try:
             return int(val)
         except ValueError:
-            log.warning("ANILIST_ID in .env is not a valid integer: '%s' — will auto-lookup", val)
+            log.warning(
+                "ANILIST_ID in .env is not a valid integer: '%s' — will auto-lookup",
+                val,
+            )
             return None
 
     def validate(self) -> list[str]:
@@ -281,25 +313,25 @@ class Config:
 # ════════════════════════ DATA TYPES ════════════════════
 @dataclass
 class EpisodeInfo:
-    absolute:   int
-    season:     int          # 0 = special/OVA
-    episode:    int
-    title:      str
-    air_date:   str  = ""
-    overview:   str  = ""
-    source:     str  = ""
+    absolute: int
+    season: int  # 0 = special/OVA
+    episode: int
+    title: str
+    air_date: str = ""
+    overview: str = ""
+    source: str = ""
     is_special: bool = False
 
 
 @dataclass
 class RenameResult:
-    original:  str
-    renamed:   str
-    episode:   EpisodeInfo
-    dest_dir:  str  = ""
-    success:   bool = False
-    error:     str  = ""
-    skipped:   bool = False
+    original: str
+    renamed: str
+    episode: EpisodeInfo
+    dest_dir: str = ""
+    success: bool = False
+    error: str = ""
+    skipped: bool = False
 
 
 # ════════════════════════ FETCHERS ═══════════════════════
@@ -315,11 +347,11 @@ class EpisodeFetcher(ABC):
     @staticmethod
     def _get(
         url: str,
-        params:  Optional[dict] = None,
-        retries: Optional[int]  = None,
-        cfg:     Optional[Config] = None,
+        params: Optional[dict] = None,
+        retries: Optional[int] = None,
+        cfg: Optional[Config] = None,
     ) -> Optional[dict]:
-        _cfg     = cfg or Config()
+        _cfg = cfg or Config()
         attempts = retries or _cfg.RETRY_ATTEMPTS
         for attempt in range(1, attempts + 1):
             try:
@@ -327,14 +359,14 @@ class EpisodeFetcher(ABC):
                 if r.status_code == 200:
                     return r.json()
                 if r.status_code == 429:
-                    wait = int(
-                        r.headers.get("Retry-After", _cfg.RETRY_DELAY * attempt)
-                    )
+                    wait = int(r.headers.get("Retry-After", _cfg.RETRY_DELAY * attempt))
                     log.warning("Rate-limited — waiting %ss …", wait)
                     time.sleep(wait)
                     continue
                 if r.status_code == 404:
-                    log.info("HTTP 404 (Not Found) for %s — resource does not exist.", url)
+                    log.info(
+                        "HTTP 404 (Not Found) for %s — resource does not exist.", url
+                    )
                     break
                 log.warning("HTTP %s for %s", r.status_code, url)
                 if 400 <= r.status_code < 500:
@@ -342,12 +374,12 @@ class EpisodeFetcher(ABC):
             except requests.exceptions.ConnectionError:
                 log.warning(
                     "Connection error (attempt %d/%d) for %s",
-                    attempt, attempts, url,
+                    attempt,
+                    attempts,
+                    url,
                 )
             except requests.exceptions.Timeout:
-                log.warning(
-                    "Timeout (attempt %d/%d) for %s", attempt, attempts, url
-                )
+                log.warning("Timeout (attempt %d/%d) for %s", attempt, attempts, url)
             except requests.exceptions.RequestException as e:
                 log.error("Request failed: %s", e)
                 break
@@ -361,6 +393,7 @@ class TMDBSearch:
     Resolves a human-readable series name to a TMDB series ID.
     Used by qbit_hook.py which only knows the torrent name.
     """
+
     BASE = "https://api.themoviedb.org/3"
 
     def __init__(self, api_key: str):
@@ -385,25 +418,23 @@ class TMDBSearch:
         if not results:
             log.warning("TMDB search for '%s' returned no results.", name)
             return None
-        top     = results[0]
+        top = results[0]
         tmdb_id = top["id"]
         en_name = top["name"]
 
         # TMDB Japanese title → pykakasi
-        ja_name     = self._fetch_japanese_name(tmdb_id) or en_name
+        ja_name = self._fetch_japanese_name(tmdb_id) or en_name
         tmdb_romaji = _romaniser.to_romaji(ja_name)
 
         # Cross-reference with AniList and pick the best romaji
         resolver = RomajiResolver()
-        romaji   = resolver.resolve(
-            search_name  = name,
-            tmdb_romaji  = tmdb_romaji,
-            english_name = en_name,
+        romaji = resolver.resolve(
+            search_name=name,
+            tmdb_romaji=tmdb_romaji,
+            english_name=en_name,
         )
 
-        log.info(
-            "Final series name: '%s' (TMDB id=%d)", romaji, tmdb_id
-        )
+        log.info("Final series name: '%s' (TMDB id=%d)", romaji, tmdb_id)
         return tmdb_id, romaji
 
     def _fetch_japanese_name(self, series_id: int) -> Optional[str]:
@@ -422,10 +453,10 @@ class TMDBFetcher(EpisodeFetcher):
     BASE = "https://api.themoviedb.org/3"
 
     def __init__(self, api_key: str, series_id: int, cfg: Optional[Config] = None):
-        self._key       = api_key
+        self._key = api_key
         self._series_id = series_id
-        self._params    = {"api_key": api_key}
-        self._cfg       = cfg or Config()
+        self._params = {"api_key": api_key}
+        self._cfg = cfg or Config()
         self._has_specials = True
 
     def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
@@ -436,51 +467,77 @@ class TMDBFetcher(EpisodeFetcher):
         if not show:
             return None
 
-        self._has_specials = any(s.get("season_number") == 0 for s in show.get("seasons", []))
+        self._has_specials = any(
+            s.get("season_number") == 0 for s in show.get("seasons", [])
+        )
         seasons = [s for s in show.get("seasons", []) if s["season_number"] > 0]
         log.info("Found %d seasons — fetching episodes in parallel …", len(seasons))
 
         season_data: dict[int, list] = {}
 
-        def fetch_season(s: dict) -> tuple[int, list]:
-            sn      = s["season_number"]
-            url     = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
-            # Request Japanese titles; fall back to English if empty
-            ja_params = {**self._params, "language": "ja"}
-            data_ja   = self._get(url, ja_params, cfg=self._cfg)
-            data_en   = self._get(url, self._params, cfg=self._cfg)
-            eps_ja    = {e["episode_number"]: e for e in (data_ja or {}).get("episodes", [])}
-            eps_en    = (data_en or {}).get("episodes", [])
-            # Merge: use Japanese title when available, otherwise English
-            merged = []
-            for ep in eps_en:
-                ep_num   = ep["episode_number"]
-                ja_ep    = eps_ja.get(ep_num, {})
-                ja_title = ja_ep.get("name", "")
-                if ja_title:
-                    ep["name"] = _romaniser.to_romaji(ja_title)
-                merged.append(ep)
-            return sn, sorted(merged, key=lambda x: x["episode_number"])
+        # ── Pass 1: fetch English episode lists (structural data) ──────────
+        # One request per season, in parallel. English is the reliable source
+        # for episode numbers and air dates. We never skip a season due to a
+        # failed Japanese request.
+        def fetch_season_en(s: dict) -> tuple[int, list]:
+            sn = s["season_number"]
+            url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
+            data = self._get(url, self._params, cfg=self._cfg)
+            if not data:
+                log.warning(
+                    "TMDB: failed to fetch season %d (English) — will retry once", sn
+                )
+                # One immediate retry before giving up
+                data = self._get(url, self._params, cfg=self._cfg)
+            eps = data.get("episodes", []) if data else []
+            if not eps:
+                log.warning("TMDB: season %d returned 0 episodes", sn)
+            return sn, sorted(eps, key=lambda x: x["episode_number"])
 
         with ThreadPoolExecutor(max_workers=self._cfg.MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_season, s): s for s in seasons}
+            futures = {pool.submit(fetch_season_en, s): s for s in seasons}
             for future in as_completed(futures):
                 sn, eps = future.result()
                 season_data[sn] = eps
 
+        # ── Pass 2: enrich with Japanese titles (best-effort, non-blocking) ─
+        # Fetch Japanese season data sequentially (avoids TMDB rate-limits).
+        # If any request fails, we simply keep the English title for that season.
+        def enrich_with_ja_titles(sn: int, eps: list) -> list:
+            url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
+            data_ja = self._get(url, {**self._params, "language": "ja"}, cfg=self._cfg)
+            if not data_ja:
+                return eps
+            ja_map = {
+                e["episode_number"]: e.get("name", "")
+                for e in data_ja.get("episodes", [])
+            }
+            for ep in eps:
+                ja_title = ja_map.get(ep["episode_number"], "")
+                if ja_title:
+                    ep["name"] = _romaniser.to_romaji(ja_title)
+            return eps
+
+        for sn in sorted(season_data):
+            season_data[sn] = enrich_with_ja_titles(sn, season_data[sn])
+
         mapping: dict[int, EpisodeInfo] = {}
         abs_counter = 1
         for sn in sorted(season_data):
-            for ep in season_data[sn]:
+            # Use position within the season (1, 2, 3 …) as the episode number.
+            # TMDB sometimes stores episode_number as a global counter across
+            # seasons (e.g. S2E1 → episode_number=13). We always want S02E01
+            # regardless of what TMDB's internal numbering says.
+            for pos, ep in enumerate(season_data[sn], start=1):
                 mapping[abs_counter] = EpisodeInfo(
-                    absolute   = abs_counter,
-                    season     = sn,
-                    episode    = ep["episode_number"],
-                    title      = ep.get("name", ""),
-                    air_date   = ep.get("air_date", ""),
-                    overview   = ep.get("overview", ""),
-                    source     = self.name,
-                    is_special = False,
+                    absolute=abs_counter,
+                    season=sn,
+                    episode=pos,
+                    title=ep.get("name", ""),
+                    air_date=ep.get("air_date", ""),
+                    overview=ep.get("overview", ""),
+                    source=self.name,
+                    is_special=False,
                 )
                 abs_counter += 1
 
@@ -493,7 +550,7 @@ class TMDBFetcher(EpisodeFetcher):
             return {}
 
         log.info("TMDB — fetching specials (Season 0) …")
-        url  = f"{self.BASE}/tv/{self._series_id}/season/0"
+        url = f"{self.BASE}/tv/{self._series_id}/season/0"
         data = self._get(url, self._params, cfg=self._cfg)
         if not data:
             log.info("No specials found on TMDB.")
@@ -503,16 +560,14 @@ class TMDBFetcher(EpisodeFetcher):
         for ep in data.get("episodes", []):
             ep_num = ep["episode_number"]
             specials[ep_num] = EpisodeInfo(
-                absolute   = ep_num,
-                season     = 0,
-                episode    = ep_num,
-                title      = _romaniser.to_romaji(
-                    ep.get("name", f"Special {ep_num}")
-                ),
-                air_date   = ep.get("air_date", ""),
-                overview   = ep.get("overview", ""),
-                source     = self.name,
-                is_special = True,
+                absolute=ep_num,
+                season=0,
+                episode=ep_num,
+                title=_romaniser.to_romaji(ep.get("name", f"Special {ep_num}")),
+                air_date=ep.get("air_date", ""),
+                overview=ep.get("overview", ""),
+                source=self.name,
+                is_special=True,
             )
 
         log.info("TMDB: found %d specials.", len(specials))
@@ -526,8 +581,9 @@ class AniListFetcher(EpisodeFetcher):
     Returns the official romaji title directly — no mechanical conversion.
     Used both as a fallback fetcher and as a romaji cross-reference.
     """
-    name  = "AniList"
-    URL   = "https://graphql.anilist.co"
+
+    name = "AniList"
+    URL = "https://graphql.anilist.co"
 
     # Fetches: romaji/english/native titles + episode list
     SERIES_QUERY = """
@@ -588,13 +644,17 @@ class AniListFetcher(EpisodeFetcher):
         # Cache the resolved ID so fetch() can use it without a second request
         if not self._id:
             self._id = media.get("id")
-        titles  = media.get("title", {})
-        romaji  = titles.get("romaji")
+        titles = media.get("title", {})
+        romaji = titles.get("romaji")
         english = titles.get("english")
-        native  = titles.get("native")
+        native = titles.get("native")
         log.info(
             "AniList title lookup '%s' → id=%s romaji='%s' english='%s' native='%s'",
-            name, self._id, romaji, english, native,
+            name,
+            self._id,
+            romaji,
+            english,
+            native,
         )
         return romaji or english
 
@@ -612,15 +672,15 @@ class AniListFetcher(EpisodeFetcher):
 
         mapping: dict[int, EpisodeInfo] = {}
         for idx, ep_data in enumerate(streaming, start=1):
-            raw   = ep_data.get("title", f"Episode {idx}")
+            raw = ep_data.get("title", f"Episode {idx}")
             # Strip leading "Episode N - " prefix from streaming titles
             clean = re.sub(r"^Episode\s+\d+\s*[-–]\s*", "", raw).strip()
             mapping[idx] = EpisodeInfo(
-                absolute = idx,
-                season   = 1,
-                episode  = idx,
-                title    = clean or raw,
-                source   = self.name,
+                absolute=idx,
+                season=1,
+                episode=idx,
+                title=clean or raw,
+                source=self.name,
             )
 
         log.info("AniList: mapped %d episode titles.", len(mapping))
@@ -645,8 +705,8 @@ class AniDBFetcher:
       lang:    'x-jat' = romaji, 'en' = English, 'ja' = Japanese
     """
 
-    DUMP_URL       = "https://anidb.net/api/anime-titles.dat.gz"
-    CACHE_FILE     = Path(__file__).parent / "anidb_titles.dat.gz"
+    DUMP_URL = "https://anidb.net/api/anime-titles.dat.gz"
+    CACHE_FILE = Path(__file__).parent / "anidb_titles.dat.gz"
     CACHE_MAX_AGE_DAYS = 7
 
     # Minimum similarity (0-1) to accept a match
@@ -679,7 +739,9 @@ class AniDBFetcher:
     def _iter_romaji(self):
         """Yield (aid, romaji_title) for every x-jat entry in the dump."""
         try:
-            with gzip.open(self.CACHE_FILE, "rt", encoding="utf-8", errors="replace") as fh:
+            with gzip.open(
+                self.CACHE_FILE, "rt", encoding="utf-8", errors="replace"
+            ) as fh:
                 for line in fh:
                     line = line.strip()
                     if not line or line.startswith("#"):
@@ -701,7 +763,7 @@ class AniDBFetcher:
         if not a_tokens or not b_tokens:
             return 0.0
         intersection = a_tokens & b_tokens
-        union        = a_tokens | b_tokens
+        union = a_tokens | b_tokens
         return len(intersection) / len(union)
 
     def find_romaji(self, name: str) -> Optional[str]:
@@ -713,7 +775,7 @@ class AniDBFetcher:
             return None
 
         best_title: Optional[str] = None
-        best_score: float         = 0.0
+        best_score: float = 0.0
 
         for _aid, romaji in self._iter_romaji():
             score = self._similarity(name, romaji)
@@ -724,13 +786,15 @@ class AniDBFetcher:
         if best_title and best_score >= self.MIN_SIMILARITY:
             log.info(
                 "AniDB match — '%s'  (similarity %.0f%%)",
-                best_title, best_score * 100,
+                best_title,
+                best_score * 100,
             )
             return anime_title_case(best_title)
 
         log.info(
             "AniDB found no match for '%s' above threshold (best %.0f%%)",
-            name, best_score * 100,
+            name,
+            best_score * 100,
         )
         return None
 
@@ -753,12 +817,12 @@ class RomajiResolver:
 
     def __init__(self) -> None:
         self._anilist = AniListFetcher()
-        self._anidb   = AniDBFetcher()
+        self._anidb = AniDBFetcher()
 
     def resolve(
         self,
-        search_name:  str,
-        tmdb_romaji:  str,
+        search_name: str,
+        tmdb_romaji: str,
         english_name: str,
     ) -> str:
         # ── 1. Try AniList (human-curated, highest quality) ──────────────
@@ -768,7 +832,9 @@ class RomajiResolver:
             similarity = self._similarity(tmdb_romaji, anilist_romaji)
             log.info(
                 "Romaji comparison — TMDB: '%s'  AniList: '%s'  similarity: %.0f%%",
-                tmdb_romaji, anilist_romaji, similarity * 100,
+                tmdb_romaji,
+                anilist_romaji,
+                similarity * 100,
             )
             if similarity >= 0.80:
                 log.info("High similarity — using AniList romaji: '%s'", anilist_romaji)
@@ -776,7 +842,9 @@ class RomajiResolver:
                 log.info(
                     "Low similarity (%.0f%%) — preferring AniList: '%s'  "
                     "(TMDB was: '%s')",
-                    similarity * 100, anilist_romaji, tmdb_romaji,
+                    similarity * 100,
+                    anilist_romaji,
+                    tmdb_romaji,
                 )
             return anilist_romaji
 
@@ -804,7 +872,7 @@ class RomajiResolver:
         if not a or not b:
             return 0.0
         # Count matching characters in order (LCS-lite)
-        longer  = max(len(a), len(b))
+        longer = max(len(a), len(b))
         matches = sum(c1 == c2 for c1, c2 in zip(a, b))
         return matches / longer
 
@@ -831,23 +899,25 @@ class SpecialParser:
 
 class EpisodeNumberParser:
     PATTERNS: list[tuple[str, str]] = [
-        ("SxxExx",           r"[Ss]\d+[Ee](\d{1,4})"),
+        ("SxxExx", r"[Ss]\d+[Ee](\d{1,4})"),
         ("Explicit keyword", r"(?:ep|episode)[.\s_-]*(\d{1,4})\b"),
-        ("Brackets [NNN]",   r"\[(\d{2,4})\]"),
-        ("Dash-space NNN",   r"[-–]\s*(\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
-        ("Trailing number",  r"[\s._](\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
+        ("Brackets [NNN]", r"\[(\d{2,4})\]"),
+        ("Dash-space NNN", r"[-–]\s*(\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
+        ("Trailing number", r"[\s._](\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
     ]
 
     # Expanded patterns to match explicit Season and Episode together
     SEASON_EP_PATTERNS = [
         # Pattern 1: SxxExx or SxxEPxx or Sxx Ep xx (e.g. S02E08, S2 Ep 8, S02EP08)
         re.compile(r"[Ss](\d{1,2})\s*[Ee][Pp]?\s*(\d{1,4})", re.IGNORECASE),
-
         # Pattern 2: Sxx - xx or Season xx - xx or Sxx_xx (e.g. S4 - 07, Season 2 - 05, S2_08)
         re.compile(r"\b(?:Season|S)(\d{1,2})\s*[-–_]\s*(\d{1,4})\b", re.IGNORECASE),
-
         # Pattern 3: xxExx or xx_xx like 2x08 (cross-format)
         re.compile(r"\b(\d{1,2})x(\d{1,4})\b", re.IGNORECASE),
+        # Pattern 4: Ordinal seasons - 1st Season, 2nd Season, 3rd Season, etc. (e.g., "2nd Season - 07")
+        re.compile(
+            r"\b(\d{1,2})(?:st|nd|rd|th)\s+Season\s*[-–_]\s*(\d{1,4})\b", re.IGNORECASE
+        ),
     ]
 
     @classmethod
@@ -921,10 +991,10 @@ class AnimeRenamer:
         cfg: Config,
         rename_via_qbit: Optional[callable] = None,
     ):
-        self._cfg            = cfg
-        self._history        = RenameHistory(cfg.history_file)
-        self._parser         = EpisodeNumberParser()
-        self._special        = SpecialParser()
+        self._cfg = cfg
+        self._history = RenameHistory(cfg.history_file)
+        self._parser = EpisodeNumberParser()
+        self._special = SpecialParser()
         # If provided, use qBit API for moves instead of os.rename
         self._rename_via_qbit = rename_via_qbit
 
@@ -941,7 +1011,7 @@ class AnimeRenamer:
             self._cfg.TMDB_SERIES_ID,
             self._cfg,
         )
-        episode_map  = fetcher.fetch()
+        episode_map = fetcher.fetch()
         specials_map = fetcher.fetch_specials()
 
         if not episode_map:
@@ -964,7 +1034,7 @@ class AnimeRenamer:
 
         restored, skipped_count, restored_keys = 0, 0, []
         for rel_new, orig_name in history.items():
-            src  = self._cfg.MEDIA_DIR / rel_new
+            src = self._cfg.MEDIA_DIR / rel_new
             dest = self._cfg.MEDIA_DIR / orig_name
             if src.exists():
                 try:
@@ -983,7 +1053,7 @@ class AnimeRenamer:
 
     # ── internals ────────────────────────────────────────
     def _season_folder(self, season: int) -> Path:
-        name   = (
+        name = (
             self._cfg.SPECIALS_FOLDER_NAME
             if season == 0
             else self._cfg.SEASON_FOLDER_TEMPLATE.format(season=season)
@@ -1011,16 +1081,16 @@ class AnimeRenamer:
 
     def _process_files(
         self,
-        episode_map:  dict[int, EpisodeInfo],
+        episode_map: dict[int, EpisodeInfo],
         specials_map: dict[int, EpisodeInfo],
         dry_run: bool,
     ) -> list[RenameResult]:
         media_dir = self._cfg.MEDIA_DIR
-        files     = sorted(p for p in media_dir.rglob("*") if p.is_file())
-        results:         list[RenameResult] = []
-        session_history: dict[str, str]     = {}
+        files = sorted(p for p in media_dir.rglob("*") if p.is_file())
+        results: list[RenameResult] = []
+        session_history: dict[str, str] = {}
 
-        organize   = self._cfg.ORGANIZE_INTO_FOLDERS
+        organize = self._cfg.ORGANIZE_INTO_FOLDERS
         mode_label = (
             "DRY RUN — no files will be changed"
             if dry_run
@@ -1029,8 +1099,11 @@ class AnimeRenamer:
         )
         log.info("Scanning: %s | %s", media_dir, mode_label)
 
-        # Build mapping for quick lookup by (season, episode)
-        season_ep_map = {(ep.season, ep.episode): ep for ep in episode_map.values()}
+        # episode.episode is now always position-within-season (1, 2, 3 …)
+        # regardless of how TMDB numbers episodes internally.
+        season_ep_map: dict[tuple[int, int], EpisodeInfo] = {
+            (ep.season, ep.episode): ep for ep in episode_map.values()
+        }
 
         for path in files:
             if path.suffix.lower() not in self._cfg.VIDEO_EXTENSIONS:
@@ -1039,8 +1112,12 @@ class AnimeRenamer:
             sp_num = self._special.parse(path.name)
             if sp_num is not None:
                 info = specials_map.get(sp_num) or EpisodeInfo(
-                    absolute=sp_num, season=0, episode=sp_num,
-                    title=path.stem, source="filename", is_special=True,
+                    absolute=sp_num,
+                    season=0,
+                    episode=sp_num,
+                    title=path.stem,
+                    source="filename",
+                    is_special=True,
                 )
                 self._handle_file(
                     path, info, dry_run, organize, results, session_history
@@ -1051,21 +1128,34 @@ class AnimeRenamer:
             season_num, ep_num = self._parser.parse_season_episode(path.name)
             info = None
             if season_num is not None and ep_num is not None:
+                # Direct lookup — episode.episode is always position-within-season
                 info = season_ep_map.get((season_num, ep_num))
+
+                # Fallback: season number exceeds TMDB seasons → use latest season
                 if not info:
-                    # Fallback: if the parsed season is greater than the max season in TMDB,
-                    # map it to the max season (latest season fallback)
                     max_season = max((s for s, e in season_ep_map.keys()), default=1)
                     if season_num > max_season:
                         info = season_ep_map.get((max_season, ep_num))
                         if info:
-                            log.info("Mapped season %d -> %d for episode %d (latest season fallback)", season_num, max_season, ep_num)
+                            log.info(
+                                "Season %d > max TMDB season %d — mapped ep %d to S%02d",
+                                season_num,
+                                max_season,
+                                ep_num,
+                                max_season,
+                            )
 
                 if not info:
-                    log.warning("S%02dE%02d not in episode map — skipped.", season_num, ep_num)
+                    log.warning(
+                        "S%02dE%02d not in episode map — skipped.", season_num, ep_num
+                    )
                     results.append(
-                        RenameResult(path.name, "",
-                                     EpisodeInfo(0, season_num, ep_num, ""), skipped=True)
+                        RenameResult(
+                            path.name,
+                            "",
+                            EpisodeInfo(0, season_num, ep_num, ""),
+                            skipped=True,
+                        )
                     )
                     continue
             else:
@@ -1074,28 +1164,34 @@ class AnimeRenamer:
                 if abs_num is None:
                     log.warning("Skipped (unrecognised): %s", path.name)
                     results.append(
-                        RenameResult(path.name, "", EpisodeInfo(0, 0, 0, ""),
-                                     skipped=True)
+                        RenameResult(
+                            path.name, "", EpisodeInfo(0, 0, 0, ""), skipped=True
+                        )
                     )
                     continue
 
                 if abs_num not in episode_map:
                     log.warning("Ep %d not in episode map — skipped.", abs_num)
                     results.append(
-                        RenameResult(path.name, "",
-                                     EpisodeInfo(abs_num, 0, 0, ""), skipped=True)
+                        RenameResult(
+                            path.name, "", EpisodeInfo(abs_num, 0, 0, ""), skipped=True
+                        )
                     )
                     continue
                 info = episode_map[abs_num]
 
             self._handle_file(
-                path, info, dry_run, organize,
-                results, session_history,
+                path,
+                info,
+                dry_run,
+                organize,
+                results,
+                session_history,
             )
 
-        done    = sum(1 for r in results if r.success)
+        done = sum(1 for r in results if r.success)
         skipped = sum(1 for r in results if r.skipped)
-        failed  = sum(1 for r in results if r.error)
+        failed = sum(1 for r in results if r.error)
 
         if not dry_run and session_history:
             self._history.save(session_history)
@@ -1109,42 +1205,38 @@ class AnimeRenamer:
 
     def _handle_file(
         self,
-        path:            Path,
-        info:            EpisodeInfo,
-        dry_run:         bool,
-        organize:        bool,
-        results:         list[RenameResult],
+        path: Path,
+        info: EpisodeInfo,
+        dry_run: bool,
+        organize: bool,
+        results: list[RenameResult],
         session_history: dict[str, str],
     ) -> None:
         new_name = self._format_name(info, path.suffix)
 
         if organize:
             dest_folder = (
-                self._season_folder(info.season) if not dry_run
-                else self._cfg.MEDIA_DIR / (
-                    self._cfg.SPECIALS_FOLDER_NAME if info.season == 0
-                    else self._cfg.SEASON_FOLDER_TEMPLATE.format(
-                        season=info.season
-                    )
+                self._season_folder(info.season)
+                if not dry_run
+                else self._cfg.MEDIA_DIR
+                / (
+                    self._cfg.SPECIALS_FOLDER_NAME
+                    if info.season == 0
+                    else self._cfg.SEASON_FOLDER_TEMPLATE.format(season=info.season)
                 )
             )
             dest_path = dest_folder / new_name
-            rel_key   = str(
-                dest_folder.relative_to(self._cfg.MEDIA_DIR) / new_name
-            )
+            rel_key = str(dest_folder.relative_to(self._cfg.MEDIA_DIR) / new_name)
         else:
             dest_path = self._cfg.MEDIA_DIR / new_name
-            rel_key   = new_name
+            rel_key = new_name
 
         if path.resolve() == dest_path.resolve():
-            results.append(
-                RenameResult(path.name, new_name, info, skipped=True)
-            )
+            results.append(RenameResult(path.name, new_name, info, skipped=True))
             return
 
         season_tag = (
-            "SP" if info.is_special
-            else f"S{info.season:02d}E{info.episode:02d}"
+            "SP" if info.is_special else f"S{info.season:02d}E{info.episode:02d}"
         )
         log.info(
             "%s  |  %s  →  %s",
@@ -1154,7 +1246,9 @@ class AnimeRenamer:
         )
 
         result = RenameResult(
-            path.name, new_name, info,
+            path.name,
+            new_name,
+            info,
             dest_dir=str(dest_path.parent.relative_to(self._cfg.MEDIA_DIR)),
         )
 
