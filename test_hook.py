@@ -22,10 +22,10 @@ load_dotenv(Path(__file__).parent / ".env")
 
 
 # ── output helpers ───────────────────────────────────────
-def ok(msg: str)   -> None: print(f"  ✅  PASS  {msg}")
-def fail(msg: str) -> None: print(f"  ❌  FAIL  {msg}")
-def info(msg: str) -> None: print(f"  ℹ️        {msg}")
-def warn(msg: str) -> None: print(f"  ⚠️        {msg}")
+def ok(msg: str)   -> None: print(f"  PASS  {msg}")
+def fail(msg: str) -> None: print(f"  FAIL  {msg}")
+def info(msg: str) -> None: print(f"        {msg}")
+def warn(msg: str) -> None: print(f"        {msg}")
 def head(msg: str) -> None: print(f"\n{'─'*58}\n  {msg}\n{'─'*58}")
 def bail(msg: str) -> None:
     fail(msg)
@@ -33,9 +33,7 @@ def bail(msg: str) -> None:
     sys.exit(1)
 
 
-# ════════════════════════════════════════════════════════
 # STEP 1 — Environment variables
-# ════════════════════════════════════════════════════════
 def step1_env() -> dict[str, str]:
     head("STEP 1 — Environment variables")
 
@@ -72,13 +70,11 @@ def step1_env() -> dict[str, str]:
     return env
 
 
-# ════════════════════════════════════════════════════════
 # STEP 2 — qBittorrent connection + login
-# ════════════════════════════════════════════════════════
 def step2_qbit_login(env: dict) -> requests.Session:
     head("STEP 2 — qBittorrent connection & login")
 
-    url  = env["QBIT_URL"].rstrip("/")
+    url = env["QBIT_URL"].rstrip("/")
     sess = requests.Session()
 
     try:
@@ -88,7 +84,6 @@ def step2_qbit_login(env: dict) -> requests.Session:
             timeout=10,
         )
         if r.status_code in (200, 204):
-            # qBit returns "Ok." on success, "Fails." on bad credentials
             if r.text.strip().lower() == "fails.":
                 bail(
                     f"Login rejected — wrong username or password.\n"
@@ -100,9 +95,9 @@ def step2_qbit_login(env: dict) -> requests.Session:
     except requests.exceptions.ConnectionError:
         fail(f"Cannot reach qBittorrent at {url}")
         info("Checklist:")
-        info("  • Is qBittorrent running?")
-        info("  • Tools → Preferences → Web UI → 'Enable the Web User Interface'")
-        info(f"  • Is the port correct? (QBIT_URL={url})")
+        info("  - Is qBittorrent running?")
+        info("  - Tools -> Preferences -> Web UI -> 'Enable the Web User Interface'")
+        info(f"  - Is the port correct? (QBIT_URL={url})")
         bail("Connection failed")
     except Exception as exc:
         bail(f"Unexpected error: {exc}")
@@ -110,9 +105,7 @@ def step2_qbit_login(env: dict) -> requests.Session:
     return sess
 
 
-# ════════════════════════════════════════════════════════
 # STEP 3 — Find a completed torrent
-# ════════════════════════════════════════════════════════
 def step3_find_torrent(sess: requests.Session, env: dict) -> dict:
     head("STEP 3 — Find a completed torrent to test with")
 
@@ -148,9 +141,7 @@ def step3_find_torrent(sess: requests.Session, env: dict) -> dict:
     return target
 
 
-# ════════════════════════════════════════════════════════
 # STEP 4 — File list inside the torrent
-# ════════════════════════════════════════════════════════
 def step4_file_list(sess: requests.Session, env: dict, torrent: dict) -> list[dict]:
     head("STEP 4 — Files inside the torrent")
 
@@ -171,19 +162,17 @@ def step4_file_list(sess: requests.Session, env: dict, torrent: dict) -> list[di
     for entry in files[:5]:
         info(f"  {entry['name']}")
     if len(files) > 5:
-        info(f"  … and {len(files) - 5} more")
+        info(f"  ... and {len(files) - 5} more")
 
     return files
 
 
-# ════════════════════════════════════════════════════════
 # STEP 5 — Nyaa title lookup
-# ════════════════════════════════════════════════════════
 def step5_nyaa(torrent: dict) -> str:
     head("STEP 5 — Nyaa title lookup")
 
     torrent_hash = torrent["hash"]
-    fallback     = torrent["name"]
+    fallback = torrent["name"]
 
     try:
         from bs4 import BeautifulSoup
@@ -199,14 +188,12 @@ def step5_nyaa(torrent: dict) -> str:
         )
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # The first <a> in the torrent table title column
         title_link = soup.select_one("td.text-center + td a:not(.comments)")
         if title_link:
             nyaa_title = title_link.text.strip()
             ok(f"Nyaa title: {nyaa_title}")
             return nyaa_title
 
-        # Older fallback: look for h3
         if soup.h3:
             nyaa_title = soup.h3.text.strip()
             ok(f"Nyaa title (h3): {nyaa_title}")
@@ -222,9 +209,7 @@ def step5_nyaa(torrent: dict) -> str:
         return fallback
 
 
-# ════════════════════════════════════════════════════════
 # STEP 6 — Series name extraction
-# ════════════════════════════════════════════════════════
 def step6_series_name(nyaa_title: str) -> str:
     head("STEP 6 — Series name extraction")
 
@@ -235,14 +220,12 @@ def step6_series_name(nyaa_title: str) -> str:
     def sanitize(name: str) -> str:
         return re.sub(r'[<>:"/\\|?*,]', "", name).strip()
 
-    # Try fansub pattern first: [Group] Series Name - 1100 [tags]
     m = TITLE_PATTERN.match(nyaa_title)
     if m:
         name = sanitize(m.group(1).split("(")[0].strip())
         ok(f"Extracted (fansub pattern): '{name}'")
         return name
 
-    # Fallback: strip [Group], episode number, year
     cleaned = re.sub(r"^\[[^\]]+\]\s*", "", nyaa_title)
     cleaned = re.sub(r"\s*-\s*\d+.*$",  "", cleaned)
     cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)
@@ -257,28 +240,26 @@ def step6_series_name(nyaa_title: str) -> str:
     info("Expected format: [Group] Series Name - Episode [tags]")
     info("Adjust TITLE_PATTERN in qbit_hook.py to match your release group.")
     bail("Series name extraction failed")
-    return ""  # unreachable — satisfies type checker
+    return ""  # unreachable
 
 
-# ════════════════════════════════════════════════════════
 # STEP 7 — TMDB search + romaji resolution
-# ════════════════════════════════════════════════════════
 def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
-    head("STEP 7 — TMDB search + romaji resolution (TMDB × AniList)")
+    head("STEP 7 — TMDB search + romaji resolution (TMDB x AniList)")
 
-    # Import from renamer_core so we test the exact same code path
-    # the real hook uses
     try:
-        from renamer_core import AniListFetcher, RomajiResolver, TMDBSearch, _romaniser
+        from renamer import AniListFetcher, RomajiResolver
+        from renamer.providers.tmdb import TMDBSearch
+        from renamer.romaniser import _romaniser
     except ImportError as exc:
         bail(
-            f"Could not import renamer_core: {exc}\n"
-            "  Make sure renamer_core.py is in the same folder."
+            f"Could not import renamer package: {exc}\n"
+            "  Make sure the renamer/ package is in the same folder."
         )
 
     searcher = TMDBSearch(env["TMDB_API_KEY"])
 
-    # ── TMDB search ──────────────────────────────────────
+    # ── TMDB search
     tmdb_data = requests.get(
         "https://api.themoviedb.org/3/search/tv",
         params={
@@ -307,7 +288,7 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
         for r in results[1:4]:
             info(f"  id={r['id']}  '{r['name']}'  ({r.get('first_air_date', '?')})")
 
-    # ── Japanese title → pykakasi ─────────────────────────
+    # ── Japanese title -> pykakasi
     ja_data = requests.get(
         f"https://api.themoviedb.org/3/tv/{tmdb_id}",
         params={"api_key": env["TMDB_API_KEY"], "language": "ja"},
@@ -318,7 +299,7 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
     info(f"TMDB Japanese title : '{ja_name}'")
     info(f"pykakasi romanised  : '{tmdb_romaji}'")
 
-    # ── AniList romaji ────────────────────────────────────
+    # ── AniList romaji
     anilist    = AniListFetcher()
     al_romaji  = anilist.find_romaji(series_name)
     if al_romaji:
@@ -326,7 +307,7 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
     else:
         warn("AniList returned no romaji — will rely on pykakasi")
 
-    # ── RomajiResolver final decision ─────────────────────
+    # ── RomajiResolver final decision
     resolver     = RomajiResolver()
     final_romaji = resolver.resolve(
         search_name  = series_name,
@@ -338,16 +319,12 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
     return tmdb_id, final_romaji
 
 
-# ════════════════════════════════════════════════════════
 # STEP 8 — qBit renameFile endpoint probe
-# ════════════════════════════════════════════════════════
 def step8_rename_probe(sess: requests.Session, env: dict, torrent: dict) -> None:
     head("STEP 8 — qBit renameFile API probe (no files changed)")
 
     url = env["QBIT_URL"].rstrip("/")
 
-    # Send a deliberately invalid path — qBit returns 400/409 which is fine;
-    # we just want to confirm the endpoint exists and auth works.
     r = sess.post(
         f"{url}/api/v2/torrents/renameFile",
         data={
@@ -364,8 +341,8 @@ def step8_rename_probe(sess: requests.Session, env: dict, torrent: dict) -> None
     elif r.status_code == 403:
         fail("renameFile returned 403 Forbidden")
         info("Possible causes:")
-        info("  • qBittorrent version too old (need 4.3.9+)")
-        info("  • CSRF protection — try accessing via http, not https")
+        info("  - qBittorrent version too old (need 4.3.9+)")
+        info("  - CSRF protection — try accessing via http, not https")
         bail("renameFile endpoint not accessible")
     elif r.status_code == 404:
         fail("renameFile returned 404 — endpoint not found")
@@ -376,9 +353,7 @@ def step8_rename_probe(sess: requests.Session, env: dict, torrent: dict) -> None
         info("Proceeding — this may still work")
 
 
-# ════════════════════════════════════════════════════════
 # STEP 9 — Dry-run rename preview
-# ════════════════════════════════════════════════════════
 def step9_dry_run(
     torrent:      dict,
     tmdb_id:      int,
@@ -390,8 +365,6 @@ def step9_dry_run(
 
     save_path = Path(torrent["save_path"])
 
-    # The real hook moves the torrent to BASE/series_name/ first.
-    # For the preview we scan wherever the files currently live.
     if not save_path.exists():
         warn(f"save_path does not exist on this machine: {save_path}")
         info("Skipping file preview — files may be on a different drive.")
@@ -399,11 +372,10 @@ def step9_dry_run(
         return
 
     try:
-        from renamer_core import AniListFetcher, AnimeRenamer, Config
+        from renamer import AniListFetcher, AnimeRenamer, Config
     except ImportError as exc:
-        bail(f"Cannot import renamer_core: {exc}")
+        bail(f"Cannot import renamer package: {exc}")
 
-    # Resolve AniList ID from the API — don't require it in .env
     anilist    = AniListFetcher()
     anilist_id = anilist.find_id(final_romaji) or anilist.find_id(series_name)
     if anilist_id:
@@ -428,7 +400,7 @@ def step9_dry_run(
         return
 
     info(f"Scanning: {save_path}")
-    info("Running dry run — no files will be changed …")
+    info("Running dry run — no files will be changed ...")
     print()
 
     renamer = AnimeRenamer(cfg)
@@ -448,31 +420,27 @@ def step9_dry_run(
             info(f"  {r.original}")
 
 
-# ════════════════════════════════════════════════════════
 # SUMMARY
-# ════════════════════════════════════════════════════════
 def summary(torrent: dict, tmdb_id: int, final_romaji: str, env: dict) -> None:
     base = Path(env["BASE_DOWNLOAD_PATH"])
-    print(f"\n{'═'*58}")
-    print("  ALL STEPS PASSED ✅")
-    print(f"{'═'*58}")
+    print(f"\n{'='*58}")
+    print("  ALL STEPS PASSED")
+    print(f"{'='*58}")
     print()
     print("  To trigger manually right now:")
     print(f'    uv run python qbit_hook.py "{torrent["hash"]}" "{torrent["name"]}"')
     print()
     print("  Expected result:")
-    print(f"    Series  → '{final_romaji}'")
-    print(f"    Dest    → {base / final_romaji}/")
-    print(f"              Season 01/, Season 02/, …, Specials/")
+    print(f"    Series  -> '{final_romaji}'")
+    print(f"    Dest    -> {base / final_romaji}/")
+    print(f"              Season 01/, Season 02/, ..., Specials/")
     print()
     print("  To watch the hook live:")
     print("    tail -f renamer.log")
-    print(f"{'═'*58}\n")
+    print(f"{'='*58}\n")
 
 
-# ════════════════════════════════════════════════════════
 # MAIN
-# ════════════════════════════════════════════════════════
 def main() -> None:
     env          = step1_env()
     sess         = step2_qbit_login(env)
