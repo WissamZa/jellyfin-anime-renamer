@@ -302,10 +302,20 @@ class Config:
             )
 
         # Naming templates (not overridable at runtime — change in .env or here)
-        self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
+        self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode} - {title}{ext}"
         self.SPECIAL_TEMPLATE = "{series} - S00E{episode:02d} - {title}{ext}"
         self.SEASON_FOLDER_TEMPLATE = "Season {season:02d}"
         self.SPECIALS_FOLDER_NAME = "Specials"
+
+        raw_threshold = os.getenv("ABSOLUTE_EPISODE_THRESHOLD", "100").strip()
+        try:
+            self.ABSOLUTE_EPISODE_THRESHOLD: int = int(raw_threshold)
+        except ValueError:
+            log.warning(
+                "ABSOLUTE_EPISODE_THRESHOLD '%s' is not a valid integer — using 100",
+                raw_threshold,
+            )
+            self.ABSOLUTE_EPISODE_THRESHOLD = 100
 
         self.VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm")
         self.REQUEST_TIMEOUT = 15
@@ -1856,6 +1866,36 @@ class AnimeRenamer:
             kitsu_id=kitsu_id,
         )
 
+
+    @staticmethod
+    def _clean_special_title(stem: str, series_name: str = "") -> str:
+        """
+        Clean a special episode filename stem into a readable title.
+        Strips bracketed tags, SxxExx prefixes, and the series name prefix.
+        """
+        import re as _re
+        cleaned = stem
+        cleaned = _re.sub(r"\[[^\]]*\]", "", cleaned)
+        cleaned = _re.sub(
+            r"\((?:\d{3,4}p?|HEVC|x26\d|10bit|Multi-Subs|AAC|FLAC|BD|DVD|UNCEN|UNCUT)\s*\)",
+            "", cleaned, flags=_re.IGNORECASE,
+        )
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+        if _re.search(r"[Ss]\d+[Ee]\d+", cleaned):
+            cleaned = _re.sub(r".*?[Ss]\d+[Ee]\d+\s*[-–]?\s*", "", cleaned, count=1)
+        if series_name:
+            words = series_name.strip().split()
+            for n in range(len(words), 1, -1):
+                prefix = " ".join(words[:n])
+                escaped = _re.escape(prefix)
+                new_cleaned = _re.sub(rf"^{escaped}\s*[-–]?\s*", "", cleaned, flags=_re.IGNORECASE)
+                if new_cleaned != cleaned:
+                    cleaned = new_cleaned
+                    break
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = _re.sub(r"^[-–\s]+|[-–\s]+$", "", cleaned).strip()
+        return cleaned if cleaned else stem
+
     # ── internals ────────────────────────────────────────
     def _season_folder(self, season: int) -> Path:
         name = (
@@ -1873,13 +1913,20 @@ class AnimeRenamer:
             return self._cfg.SPECIAL_TEMPLATE.format(
                 series=self._cfg.SERIES_NAME,
                 episode=info.episode,
+                absolute=info.absolute,
                 title=clean,
                 ext=ext,
             )
+        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
+            episode_field = info.absolute
+        else:
+            episode_field = info.episode
         return self._cfg.NAME_TEMPLATE.format(
             series=self._cfg.SERIES_NAME,
             season=info.season,
-            episode=info.episode,
+            episode=episode_field,
+            absolute=info.absolute,
             title=clean,
             ext=ext,
         )
@@ -1920,7 +1967,7 @@ class AnimeRenamer:
                     absolute=sp_num,
                     season=0,
                     episode=sp_num,
-                    title=path.stem,
+                    title=self._clean_special_title(path.stem, self._cfg.SERIES_NAME),
                     source="filename",
                     is_special=True,
                 )
@@ -1936,7 +1983,23 @@ class AnimeRenamer:
                 # Direct lookup — episode.episode is always position-within-season
                 info = season_ep_map.get((season_num, ep_num))
 
-                # Fallback: season number exceeds TMDB seasons → use latest season
+                # Absolute-number fallback: long-running anime filenames use the
+                # absolute episode number in the SxxEyyy field (e.g. S22E1100).
+                # When the ep_num exceeds the threshold, treat it as absolute.
+                if not info:
+                    threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+                    treat_as_absolute = (
+                        threshold < 0
+                        or (threshold > 0 and ep_num > threshold)
+                    )
+                    if treat_as_absolute and ep_num in episode_map:
+                        info = episode_map[ep_num]
+                        log.info(
+                            "S%02dE%d not in season map — matched as absolute ep %d",
+                            season_num, ep_num, ep_num,
+                        )
+
+                # Season-overflow fallback: season number exceeds TMDB seasons
                 if not info:
                     max_season = max((s for s, e in season_ep_map.keys()), default=1)
                     if season_num > max_season:
@@ -1944,15 +2007,12 @@ class AnimeRenamer:
                         if info:
                             log.info(
                                 "Season %d > max TMDB season %d — mapped ep %d to S%02d",
-                                season_num,
-                                max_season,
-                                ep_num,
-                                max_season,
+                                season_num, max_season, ep_num, max_season,
                             )
 
                 if not info:
                     log.warning(
-                        "S%02dE%02d not in episode map — skipped.", season_num, ep_num
+                        "S%02dE%d not in episode map — skipped.", season_num, ep_num
                     )
                     results.append(
                         RenameResult(
@@ -2040,8 +2100,13 @@ class AnimeRenamer:
             results.append(RenameResult(path.name, new_name, info, skipped=True))
             return
 
+        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
+            ep_display = info.absolute
+        else:
+            ep_display = info.episode
         season_tag = (
-            "SP" if info.is_special else f"S{info.season:02d}E{info.episode:02d}"
+            "SP" if info.is_special else f"S{info.season:02d}E{ep_display}"
         )
         log.info(
             "%s  |  %s  →  %s",

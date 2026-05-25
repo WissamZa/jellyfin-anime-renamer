@@ -148,10 +148,36 @@ class Config:
             self.PROVIDER = Provider.from_str(env_provider) if env_provider else Provider.TMDB
 
         # Naming templates (not overridable at runtime — change in .env or here)
-        self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
+        # Available placeholders:
+        #   {series}   — series name
+        #   {season}   — season number (always 2-digit padded)
+        #   {episode}  — episode number within the season (2-digit padded)
+        #   {absolute} — absolute (global) episode number — used for long-running anime
+        #   {title}    — episode title
+        #   {ext}      — file extension including dot (.mkv)
+        self.NAME_TEMPLATE = "{series} - S{season:02d}E{episode} - {title}{ext}"
         self.SPECIAL_TEMPLATE = "{series} - S00E{episode:02d} - {title}{ext}"
         self.SEASON_FOLDER_TEMPLATE = "Season {season:02d}"
         self.SPECIALS_FOLDER_NAME = "Specials"
+
+        # Long-running anime (e.g. One Piece, Naruto) use the absolute episode number
+        # as the episode field so the filename reflects the true global episode count.
+        #
+        # When a series has more episodes than this threshold the episode number in the
+        # filename is replaced with the absolute counter:
+        #   One Piece ep 1163  →  One Piece - S23E1163 - Home ... .mkv
+        #
+        # Set ABSOLUTE_EPISODE_THRESHOLD=0 in .env to always use within-season numbering.
+        # Set ABSOLUTE_EPISODE_THRESHOLD=-1 to always use absolute numbering.
+        raw_threshold = os.getenv("ABSOLUTE_EPISODE_THRESHOLD", "100").strip()
+        try:
+            self.ABSOLUTE_EPISODE_THRESHOLD: int = int(raw_threshold)
+        except ValueError:
+            log.warning(
+                "ABSOLUTE_EPISODE_THRESHOLD '%s' is not a valid integer — using 100",
+                raw_threshold,
+            )
+            self.ABSOLUTE_EPISODE_THRESHOLD = 100
 
         self.VIDEO_EXTENSIONS = (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm")
         self.REQUEST_TIMEOUT = 15

@@ -277,39 +277,98 @@ class AnimeRenamer:
             return self._cfg.SPECIAL_TEMPLATE.format(
                 series=self._cfg.SERIES_NAME,
                 episode=info.episode,
+                absolute=info.absolute,
                 title=clean,
                 ext=ext,
             )
+
+        # Long-running anime (e.g. One Piece, Naruto) use the absolute episode
+        # number as the episode field so e.g. episode 1163 renders as S23E1163
+        # rather than S23E01 (which would be meaningless to media managers).
+        #
+        # Threshold behaviour (ABSOLUTE_EPISODE_THRESHOLD in .env):
+        #   > 0  → use absolute when absolute > threshold  (default: 100)
+        #   = 0  → always use within-season numbering
+        #   < 0  → always use absolute numbering
+        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
+            episode_field = info.absolute
+        else:
+            episode_field = info.episode
+
         return self._cfg.NAME_TEMPLATE.format(
             series=self._cfg.SERIES_NAME,
             season=info.season,
-            episode=info.episode,
+            episode=episode_field,
+            absolute=info.absolute,
             title=clean,
             ext=ext,
         )
 
     @staticmethod
-    def _clean_special_title(stem: str) -> str:
+    def _clean_special_title(stem: str, series_name: str = "") -> str:
         """
         Clean a special episode's filename stem into a readable title.
 
-        Strips release-group brackets, quality tags, and common noise
-        from filenames like:
-          [Judas] Re Zero - OVA (Memory Snow) [1080p][HEVC x265 10bit][Multi-Subs]
-        →  Re Zero - OVA (Memory Snow)
+        Strips release-group brackets, quality tags, SxxExx prefixes, and
+        the series name prefix so the result is just the episode title.
+
+        Examples:
+          [Judas] Re Zero - OVA (Memory Snow) [1080p][HEVC x265 10bit]
+          →  OVA (Memory Snow)
+
+          One Piece - S00E42 - [Judas] One Piece - SP42
+          →  SP42
+
+          [SubGroup] Naruto Shippuuden - Fan Letter [720p]
+          →  Fan Letter
         """
-        # Remove bracketed tags: [Judas], [1080p], [HEVC x265 10bit], [Multi-Subs], etc.
-        cleaned = re.sub(r"\[[^\]]*\]", "", stem)
-        # Remove parentheses that contain ONLY technical noise (codec, resolution, etc.)
-        # But KEEP parentheses with meaningful content like (Memory Snow)
-        cleaned = re.sub(
+        import re as _re
+        cleaned = stem
+
+        # 1. Remove all bracketed tags: [Judas], [1080p], [HEVC x265 10bit], etc.
+        cleaned = _re.sub(r"\[[^\]]*\]", "", cleaned)
+
+        # 2. Remove parentheses containing ONLY technical noise
+        cleaned = _re.sub(
             r"\((?:\d{3,4}p?|HEVC|x26\d|10bit|Multi-Subs|AAC|FLAC|BD|DVD|UNCEN|UNCUT)\s*\)",
-            "", cleaned, flags=re.IGNORECASE,
+            "", cleaned, flags=_re.IGNORECASE,
         )
-        # Collapse whitespace
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        # Remove leading dash/space
-        cleaned = re.sub(r"^[-–\s]+", "", cleaned)
+
+        # 3. Collapse whitespace early so anchor-based matches work reliably
+        #    (bracket removal in step 1 can leave leading/trailing spaces).
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+
+        # 4. Strip SxxExx / S00Exx segment and everything before it.
+        #    e.g. "One Piece - S00E42 - One Piece - SP42" → "One Piece - SP42"
+        if _re.search(r"[Ss]\d+[Ee]\d+", cleaned):
+            cleaned = _re.sub(r".*?[Ss]\d+[Ee]\d+\s*[-–]?\s*", "", cleaned, count=1)
+
+        # 5. Strip any leading series-name prefix (case-insensitive).
+        #    Applied both when no SxxExx was present (raw torrent name) and
+        #    after step 3 in case the series name repeats after the tag.
+        #
+        #    The match is done word-by-word from the longest prefix down so
+        #    that a short-form in the filename ("Re Zero") still matches even
+        #    when the resolved name is longer ("Re Zero kara Hajimeru …").
+        if series_name:
+            # Build candidates: full name, then progressively shorter prefixes
+            # (stop at 2 words so we don't accidentally strip too little)
+            words = series_name.strip().split()
+            for n in range(len(words), 1, -1):
+                prefix = " ".join(words[:n])
+                escaped = _re.escape(prefix)
+                new_cleaned = _re.sub(
+                    rf"^{escaped}\s*[-–]?\s*", "", cleaned, flags=_re.IGNORECASE
+                )
+                if new_cleaned != cleaned:
+                    cleaned = new_cleaned
+                    break
+
+        # 6. Collapse whitespace and strip leading/trailing dashes
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = _re.sub(r"^[-–\s]+|[-–\s]+$", "", cleaned).strip()
+
         return cleaned if cleaned else stem
 
     def _process_files(
@@ -355,7 +414,7 @@ class AnimeRenamer:
                     absolute=sp_num,
                     season=0,
                     episode=sp_num,
-                    title=self._clean_special_title(path.stem),
+                    title=self._clean_special_title(path.stem, self._cfg.SERIES_NAME),
                     source="filename",
                     is_special=True,
                 )
@@ -368,6 +427,31 @@ class AnimeRenamer:
             if season_num is not None and ep_num is not None:
                 info = season_ep_map.get((season_num, ep_num))
 
+                # ── Absolute-number fallback ───────────────────────────────
+                # Files from long-running anime (One Piece, Naruto, etc.) are
+                # commonly named with the absolute episode number in the
+                # episode field, e.g. "One Piece - S22E1100.mkv".
+                # TMDB stores S22 with only ~50 within-season episodes, so
+                # the (season=22, episode=1100) lookup fails.  When the
+                # episode number exceeds the threshold we treat it as an
+                # absolute number and look it up in episode_map directly.
+                if not info:
+                    threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+                    treat_as_absolute = (
+                        threshold < 0
+                        or (threshold > 0 and ep_num > threshold)
+                    )
+                    if treat_as_absolute and ep_num in episode_map:
+                        info = episode_map[ep_num]
+                        log.info(
+                            "S%02dE%d not in season map — matched as absolute ep %d",
+                            season_num, ep_num, ep_num,
+                        )
+
+                # ── Season-overflow fallback ───────────────────────────────
+                # If the season number in the filename exceeds the highest
+                # season in the episode map (provider re-numbered seasons),
+                # try the episode under the last known season instead.
                 if not info:
                     max_season = max((s for s, e in season_ep_map.keys()), default=1)
                     if season_num > max_season:
@@ -379,7 +463,7 @@ class AnimeRenamer:
                             )
 
                 if not info:
-                    log.warning("S%02dE%02d not in episode map — skipped.", season_num, ep_num)
+                    log.warning("S%02dE%d not in episode map — skipped.", season_num, ep_num)
                     results.append(
                         RenameResult(
                             path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
@@ -455,8 +539,14 @@ class AnimeRenamer:
             results.append(RenameResult(path.name, new_name, info, skipped=True))
             return
 
+        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
+        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
+            ep_display = info.absolute
+        else:
+            ep_display = info.episode
+
         season_tag = (
-            "SP" if info.is_special else f"S{info.season:02d}E{info.episode:02d}"
+            "SP" if info.is_special else f"S{info.season:02d}E{ep_display}"
         )
         log.info(
             "%s  |  %s  ->  %s",
