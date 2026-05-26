@@ -1,22 +1,23 @@
 """
-renamer.providers — Plugin-based provider system.
-
-Adding a new provider only requires:
-  1. Create a new file (e.g. renamer/providers/tvdb.py)
-  2. Subclass EpisodeFetcher from renamer.providers.base
-  3. Implement: fetch(), fetch_specials(), and optionally find_series()
-  4. Register it in ProviderRegistry._PROVIDERS below
-  5. Add the enum value to Provider in renamer.config
-
-That's it — the rest of the codebase discovers providers through
-the registry automatically.
+providers — EpisodeFetcher ABC, data classes, and ProviderRegistry.
 """
 
-from renamer.providers.base import EpisodeFetcher, SeriesSearchResult
+from renamer.providers.base import EpisodeFetcher, EpisodeInfo, RenameResult, SeriesSearchResult
 from renamer.providers.registry import ProviderRegistry
+
+# Auto-register built-in providers on import
+from renamer.providers.tmdb import TMDBFetcher, TMDBSearch
+from renamer.providers.anilist import AniListFetcher
+from renamer.providers.kitsu import KitsuFetcher
 
 __all__ = [
     "EpisodeFetcher",
+    "EpisodeInfo",
+    "RenameResult",
     "SeriesSearchResult",
     "ProviderRegistry",
+    "TMDBFetcher",
+    "TMDBSearch",
+    "AniListFetcher",
+    "KitsuFetcher",
 ]

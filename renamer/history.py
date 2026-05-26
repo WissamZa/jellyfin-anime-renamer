@@ -1,16 +1,18 @@
 """
-history.py — Rename undo log.
-
-Tracks old -> new filename mappings so renames can be reverted.
+history — RenameHistory (undo log).
 """
 
 import json
 from pathlib import Path
 
-from renamer.config import log
+from renamer.config import get_logger
+
+log = get_logger()
 
 
 class RenameHistory:
+    """JSON-backed undo log: maps new_relative_path -> original_filename."""
+
     def __init__(self, path: Path):
         self._path = path
 

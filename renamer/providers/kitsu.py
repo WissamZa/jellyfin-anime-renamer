@@ -1,371 +1,275 @@
 """
-kitsu.py — Kitsu.io JSON API provider.
+providers.kitsu — KitsuFetcher (replaces AniDB).
 
-Free API (no key needed) that provides:
-  1. Anime search by name
-  2. Multi-season discovery via sequel/prequel relationship chains
-  3. Episode lists for each season with titles
-
-Kitsu is especially good for anime with complex season structures
-(e.g. Re:Zero which has 5+ separate entries) because each cour/season
-gets its own Kitsu entry linked via sequel chains.
+Uses the Kitsu JSON API to search anime and walk sequel chains
+to build multi-season episode mappings.
 """
 
-import re
-from typing import Optional
+from typing import Any, Optional
 
-from renamer.config import log
-from renamer.providers.base import EpisodeFetcher, EpisodeInfo, SeriesSearchResult
-from renamer.romaniser import _romaniser, anime_title_case
+from renamer.config import Config, get_logger
+from renamer.providers.base import EpisodeFetcher, EpisodeInfo
+from renamer.romaniser import anime_title_case, get_romaniser
 
-
-# ── Module-level API cache (fixes the old _api_cache NameError) ──
-_api_cache: dict[tuple, Optional[dict]] = {}
+log = get_logger()
 
 
 class KitsuFetcher(EpisodeFetcher):
     """
-    Kitsu.io as a full metadata provider.
+    Fetches episode data from Kitsu (https://kitsu.io).
+
+    Key feature: walks the sequel chain so that multiple seasons
+    of the same anime are mapped with correct season numbers and
+    absolute episode counters.
     """
 
     name = "Kitsu"
-
-    API_BASE = "https://kitsu.io/api/edge"
-    API_HEADERS = {
+    BASE = "https://kitsu.io/api/edge"
+    HEADERS = {
         "Accept": "application/vnd.api+json",
         "Content-Type": "application/vnd.api+json",
     }
 
-    # Minimum similarity (0-1) to accept a name match
-    MIN_SIMILARITY = 0.45
-
-    def __init__(self, kitsu_id: Optional[int] = None):
+    def __init__(
+        self,
+        kitsu_id: Optional[int] = None,
+        cfg: Optional[Config] = None,
+    ):
+        super().__init__()
         self._id = kitsu_id
-        self._seasons: Optional[list[tuple[int, str, int]]] = None
-        self._specials_cache: dict[int, EpisodeInfo] = {}
+        self._cfg = cfg or Config()
 
-    # ── Kitsu API helpers ──────────────────────────────────
-
-    def _kitsu_get(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
-        """GET request to Kitsu API with caching and error handling."""
-        global _api_cache
-        cache_key = ("kitsu", url, frozenset((params or {}).items()))
-        if cache_key in _api_cache:
-            log.debug("Kitsu cache hit: %s", url)
-            return _api_cache[cache_key]
-
-        result = self._get(
+    # ── HTTP helper ────────────────────────────────────────
+    def _kitsu_get(
+        self,
+        url: str,
+        params: Optional[dict] = None,
+    ) -> Optional[dict[str, Any]]:
+        """HTTP GET with caching for Kitsu API."""
+        return self._get(
             url,
             params=params,
-            headers=self.API_HEADERS,
+            cfg=self._cfg,
+            headers=self.HEADERS,
         )
 
-        _api_cache[cache_key] = result
-        if result is None:
-            log.warning("Kitsu API returned no data for %s", url)
+    # ── Series search ──────────────────────────────────────
+    def find_series(self, name: str) -> Optional[tuple[int, str]]:
+        """
+        Search Kitsu by name.
+        Returns (kitsu_id, romaji_name) or None.
+        """
+        data = self._kitsu_get(
+            f"{self.BASE}/anime",
+            {"filter[text]": name, "page[limit]": "5"},
+        )
+        if not data:
+            return None
 
-        return result
+        results = data.get("data", [])
+        if not results:
+            log.warning("Kitsu search for '%s' returned no results.", name)
+            return None
 
-    def _fetch_all_pages(self, url: str, params: Optional[dict] = None) -> list[dict]:
-        """Fetch all pages of a paginated Kitsu API response."""
-        all_data: list[dict] = []
-        current_url: Optional[str] = url
-        current_params = params
-        page = 0
+        top = results[0]
+        kitsu_id = int(top["id"])
+        titles = top.get("attributes", {}).get("titles", {})
+        romaji = titles.get("en_jp") or titles.get("en") or name
+        romaji = anime_title_case(romaji)
 
-        while current_url and page < 20:  # Safety limit of 20 pages
-            data = self._kitsu_get(current_url, current_params)
+        log.info("Kitsu search: '%s' -> id=%d romaji='%s'", name, kitsu_id, romaji)
+        return kitsu_id, romaji
+
+    # ── Sequel chain ───────────────────────────────────────
+    def _walk_sequel_chain(self, start_id: int) -> list[dict[str, Any]]:
+        """
+        Starting from *start_id*, follow sequel relationships to build
+        an ordered list of anime entries (first season -> last).
+        Each entry is a dict with 'id', 'attributes', and 'season_index'.
+        """
+        chain: list[dict[str, Any]] = []
+        visited: set[int] = set()
+        current_id = start_id
+
+        season_idx = 0
+        while current_id and current_id not in visited:
+            visited.add(current_id)
+
+            data = self._kitsu_get(
+                f"{self.BASE}/anime/{current_id}",
+                {"include": "sequels,prequels"},
+            )
             if not data:
                 break
 
-            items = data.get("data", [])
-            all_data.extend(items)
-
-            links = data.get("links", {})
-            next_url = links.get("next")
-            if next_url and next_url != current_url:
-                current_url = next_url
-                current_params = None  # next URL already has params
-                page += 1
-            else:
+            anime_data = data.get("data")
+            if not anime_data:
                 break
 
-        return all_data
+            chain.append({
+                "id": int(anime_data["id"]),
+                "attributes": anime_data.get("attributes", {}),
+                "season_index": season_idx,
+            })
+            season_idx += 1
 
-    @staticmethod
-    def _similarity(a: str, b: str) -> float:
-        """Token-set similarity — order-insensitive, handles partial matches."""
-        a_tokens = set(a.lower().split())
-        b_tokens = set(b.lower().split())
-        if not a_tokens or not b_tokens:
-            return 0.0
-        intersection = a_tokens & b_tokens
-        union = a_tokens | b_tokens
-        return len(intersection) / len(union)
-
-    # ── Search by name ─────────────────────────────────────
-
-    def find_series(self, name: str) -> Optional[tuple[int, str]]:
-        """
-        Search Kitsu for an anime by name.
-        Returns (kitsu_id, romaji_title) for the best match, or None.
-        """
-        log.info("Kitsu — searching for '%s' …", name)
-
-        data = self._kitsu_get(
-            f"{self.API_BASE}/anime",
-            params={
-                "filter[text]": name,
-                "page[limit]": 10,
-            },
-        )
-
-        if not data or not data.get("data"):
-            log.warning("Kitsu search returned no results for '%s'.", name)
-            return None
-
-        best_id: Optional[int] = None
-        best_title: Optional[str] = None
-        best_score: float = 0.0
-
-        for anime in data["data"]:
-            attrs = anime.get("attributes", {})
-            titles = attrs.get("titles", {})
-
-            romaji = titles.get("en_jp") or titles.get("en")
-            english = titles.get("en")
-            slug = attrs.get("slug", "")
-
-            candidates = [t for t in [romaji, english, slug] if t]
-            for candidate in candidates:
-                score = self._similarity(name, candidate)
-                if score > best_score:
-                    best_score = score
-                    best_id = int(anime["id"])
-                    best_title = romaji or english or slug
-
-        if best_id is None or best_score < self.MIN_SIMILARITY:
-            log.info(
-                "Kitsu found no match for '%s' above threshold (best %.0f%%)",
-                name,
-                best_score * 100,
-            )
-            return None
-
-        chosen = anime_title_case(best_title)
-
-        if not self._id:
-            self._id = best_id
-
-        log.info(
-            "Kitsu find_series '%s' -> id=%d title='%s' (similarity %.0f%%)",
-            name, best_id, chosen, best_score * 100,
-        )
-        return best_id, chosen
-
-    def find_romaji(self, name: str) -> Optional[str]:
-        """Search Kitsu by name and return the romaji title."""
-        result = self.find_series(name)
-        return result[1] if result else None
-
-    # ── Multi-season discovery ─────────────────────────────
-
-    def _discover_seasons(self, kitsu_id: int) -> list[tuple[int, str, int]]:
-        """
-        Discover all seasons of an anime by following the sequel chain.
-
-        Returns a list of (season_number, title, kitsu_id) tuples ordered
-        from Season 1 to the last sequel found.
-        """
-        seasons: list[tuple[int, str, int]] = []
-
-        first_data = self._kitsu_get(f"{self.API_BASE}/anime/{kitsu_id}")
-        if not first_data or not first_data.get("data"):
-            return [(1, "Unknown", kitsu_id)]
-
-        attrs = first_data["data"].get("attributes", {})
-        titles = attrs.get("titles", {})
-        first_title = titles.get("en_jp") or titles.get("en") or attrs.get("slug", "Season 1")
-        seasons.append((1, first_title, kitsu_id))
-
-        current_id = kitsu_id
-        season_num = 1
-        visited = {kitsu_id}
-
-        for _ in range(20):  # Safety limit
-            rel_data = self._kitsu_get(
-                f"{self.API_BASE}/anime/{current_id}/media-relationships",
-                params={"page[limit]": 20, "include": "destination"},
-            )
-            if not rel_data or not rel_data.get("data"):
-                break
-
-            included_map: dict[tuple[str, str], dict] = {}
-            for inc in rel_data.get("included", []):
-                included_map[(inc.get("type"), inc.get("id"))] = inc
-
-            sequel_id: Optional[int] = None
-
-            for rel in rel_data["data"]:
-                rel_attrs = rel.get("attributes", {})
-                role = rel_attrs.get("role", "")
-
-                if role.lower() != "sequel":
-                    continue
-
-                dest_ref = (
-                    rel.get("relationships", {})
-                    .get("destination", {})
-                    .get("data", {})
-                )
-                dest_type = dest_ref.get("type")
-                dest_id_str = dest_ref.get("id")
-
-                if dest_type != "anime" or not dest_id_str:
-                    continue
-
-                sid = int(dest_id_str)
-                if sid in visited:
-                    continue
-
-                dest_anime = included_map.get(("anime", dest_id_str))
-                if dest_anime:
-                    d_attrs = dest_anime.get("attributes", {})
-                    d_titles = d_attrs.get("titles", {})
-                    d_title = (
-                        d_titles.get("en_jp")
-                        or d_titles.get("en")
-                        or d_attrs.get("slug", f"Season {season_num + 1}")
-                    )
-                    season_num += 1
-                    seasons.append((season_num, d_title, sid))
-                    sequel_id = sid
-                    break
-                else:
-                    season_num += 1
-                    sequel_info = self._kitsu_get(f"{self.API_BASE}/anime/{sid}")
-                    if sequel_info and sequel_info.get("data"):
-                        s_attrs = sequel_info["data"].get("attributes", {})
-                        s_titles = s_attrs.get("titles", {})
-                        s_title = (
-                            s_titles.get("en_jp")
-                            or s_titles.get("en")
-                            or s_attrs.get("slug", f"Season {season_num}")
-                        )
-                        seasons.append((season_num, s_title, sid))
-                    else:
-                        seasons.append((season_num, f"Season {season_num}", sid))
-                    sequel_id = sid
-                    break
-
-            if sequel_id is None:
-                break
-
-            visited.add(sequel_id)
+            # Find next sequel
+            sequel_id = self._get_sequel_id(data)
             current_id = sequel_id
 
         log.info(
-            "Kitsu: discovered %d season(s) — %s",
-            len(seasons),
-            ", ".join(f"S{s[0]}: {s[1]} (id={s[2]})" for s in seasons),
+            "Kitsu sequel chain: %d anime(s) starting from id=%d",
+            len(chain), start_id,
         )
-        return seasons
+        return chain
 
-    # ── Episode fetching ───────────────────────────────────
+    def _get_sequel_id(self, data: dict) -> Optional[int]:
+        """Extract the first sequel ID from included data or relationships."""
+        # Check included entries for sequels
+        included = data.get("included", [])
+        for item in included:
+            rels = item.get("relationships", {})
+            # If this is a sequel relationship entry, check if it links forward
+            pass
 
+        # Check relationships directly
+        relationships = data.get("data", {}).get("relationships", {})
+        sequels = relationships.get("sequels", {}).get("data", [])
+        if sequels:
+            return int(sequels[0]["id"])
+
+        # Try from included
+        for item in included:
+            item_type = item.get("type")
+            if item_type == "anime":
+                # Check if this item's prequel is our current anime
+                prequels = (
+                    item.get("relationships", {})
+                    .get("prequels", {})
+                    .get("data", [])
+                )
+                for prequel in prequels:
+                    if int(prequel.get("id", 0)) == int(
+                        data.get("data", {}).get("id", 0)
+                    ):
+                        return int(item["id"])
+
+        return None
+
+    # ── Episode fetching per anime ─────────────────────────
+    def _fetch_episodes_for_anime(
+        self, kitsu_id: int
+    ) -> list[dict[str, Any]]:
+        """Fetch all episodes for a single Kitsu anime (paginated)."""
+        episodes: list[dict[str, Any]] = []
+        offset = 0
+        limit = 20
+
+        while True:
+            data = self._kitsu_get(
+                f"{self.BASE}/anime/{kitsu_id}/episodes",
+                {"page[limit]": str(limit), "page[offset]": str(offset)},
+            )
+            if not data:
+                break
+
+            batch = data.get("data", [])
+            if not batch:
+                break
+
+            episodes.extend(batch)
+
+            # Check if there are more pages
+            links = data.get("links", {})
+            if "next" not in links:
+                break
+
+            offset += limit
+
+        return episodes
+
+    # ── Main fetch ─────────────────────────────────────────
     def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
         if not self._id:
+            log.error("Kitsu ID is required for fetch().")
             return None
 
-        log.info("Kitsu — fetching episode data for id=%d …", self._id)
+        log.info("Kitsu — fetching episodes for id=%d …", self._id)
 
-        if self._seasons is None:
-            self._seasons = self._discover_seasons(self._id)
-
-        if not self._seasons:
+        # Walk the sequel chain to get all seasons
+        chain = self._walk_sequel_chain(self._id)
+        if not chain:
+            log.error("Could not build sequel chain for Kitsu id=%d", self._id)
             return None
 
+        romaniser = get_romaniser()
         mapping: dict[int, EpisodeInfo] = {}
-        specials: dict[int, EpisodeInfo] = {}
         abs_counter = 1
-        special_counter = 1
 
-        for season_num, season_title, season_kitsu_id in self._seasons:
+        for anime_entry in chain:
+            season_num = anime_entry["season_index"] + 1  # 1-based seasons
+            anime_id = anime_entry["id"]
+            attrs = anime_entry["attributes"]
+            ep_count = attrs.get("episodeCount") or 0
+
             log.info(
-                "Kitsu — fetching episodes for S%02d '%s' (id=%d) …",
-                season_num, season_title, season_kitsu_id,
+                "Kitsu season %d: anime id=%d (%d episodes)",
+                season_num, anime_id, ep_count,
             )
 
-            episodes = self._fetch_all_pages(
-                f"{self.API_BASE}/anime/{season_kitsu_id}/episodes",
-                params={"page[limit]": 20, "sort": "number"},
-            )
-
-            if not episodes:
-                log.warning(
-                    "Kitsu: no episodes returned for S%02d (id=%d) — skipping.",
-                    season_num, season_kitsu_id,
-                )
-                continue
-
-            valid_eps = []
-            for ep in episodes:
-                attrs = ep.get("attributes", {})
-                ep_num = attrs.get("number")
-                if ep_num is not None:
-                    try:
-                        valid_eps.append((int(ep_num), ep))
-                    except (ValueError, TypeError):
-                        continue
-
-            valid_eps.sort(key=lambda x: x[0])
-
-            for ep_num, ep in valid_eps:
-                attrs = ep.get("attributes", {})
-                title = attrs.get("titles", {})
-                ep_title = title.get("en_jp") or title.get("en") or f"Episode {ep_num}"
-
-                ep_title = _romaniser.to_romaji(ep_title)
-                ep_title = anime_title_case(ep_title)
-
-                is_special = attrs.get("category", "") == "special"
-
-                air_date = ""
-                aired = attrs.get("aired")
-                if aired:
-                    air_date = aired[:10] if isinstance(aired, str) else ""
-
-                if is_special:
-                    specials[special_counter] = EpisodeInfo(
-                        absolute=special_counter,
-                        season=0,
-                        episode=special_counter,
-                        title=ep_title,
-                        air_date=air_date,
-                        source=self.name,
-                        is_special=True,
-                    )
-                    special_counter += 1
-                else:
+            # Fetch episodes for this anime
+            raw_episodes = self._fetch_episodes_for_anime(anime_id)
+            if not raw_episodes:
+                # If API returns nothing, generate placeholder episodes
+                for ep_num in range(1, max(ep_count, 1) + 1):
                     mapping[abs_counter] = EpisodeInfo(
                         absolute=abs_counter,
                         season=season_num,
                         episode=ep_num,
-                        title=ep_title,
-                        air_date=air_date,
+                        title=f"Episode {ep_num}",
                         source=self.name,
-                        is_special=False,
                     )
                     abs_counter += 1
+                continue
 
-        self._specials_cache = specials
+            # Sort episodes by number
+            ep_list = sorted(
+                raw_episodes,
+                key=lambda e: (
+                    e.get("attributes", {}).get("number") or 0
+                ),
+            )
 
-        log.info(
-            "Kitsu: mapped %d regular episodes across %d season(s), %d specials.",
-            len(mapping), len(self._seasons), len(specials),
-        )
+            for raw_ep in ep_list:
+                ep_attrs = raw_ep.get("attributes", {})
+                ep_num = ep_attrs.get("number")
+                if ep_num is None:
+                    continue
+
+                # Get title
+                ep_titles = ep_attrs.get("titles", {})
+                title = (
+                    ep_titles.get("en_jp")
+                    or ep_attrs.get("canonicalTitle")
+                    or ep_titles.get("en")
+                    or f"Episode {ep_num}"
+                )
+
+                # Romanise if Japanese
+                title = romaniser.to_romaji(title)
+
+                mapping[abs_counter] = EpisodeInfo(
+                    absolute=abs_counter,
+                    season=season_num,
+                    episode=int(ep_num),
+                    title=title,
+                    source=self.name,
+                )
+                abs_counter += 1
+
+        log.info("Kitsu: mapped %d episodes across %d season(s).", len(mapping), len(chain))
         return mapping
 
     def fetch_specials(self) -> dict[int, EpisodeInfo]:
-        """Return cached specials from the last fetch() call."""
-        return self._specials_cache
+        """Kitsu specials — not yet implemented."""
+        return {}

@@ -1,12 +1,15 @@
 """
-romaniser.py — Japanese text romanisation and anime-style title casing.
+romaniser — Japanese-to-romaji conversion and smart anime title-casing.
 """
 
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
-from renamer.config import log
+from renamer.config import get_logger
+
+log = get_logger()
 
 # ─────────────────── SMART TITLE-CASE ──────────────────
 PARTICLES_FILE = Path(__file__).resolve().parent.parent / "title_case_particles.json"
@@ -23,8 +26,7 @@ def _load_lowercase_words() -> set[str]:
     except (OSError, json.JSONDecodeError) as exc:
         log.warning(
             "Could not load %s (%s) — using built-in fallback.",
-            PARTICLES_FILE.name,
-            exc,
+            PARTICLES_FILE.name, exc,
         )
         return {
             "no", "ni", "wa", "ga", "wo", "to", "de", "ka", "na", "mo",
@@ -33,10 +35,12 @@ def _load_lowercase_words() -> set[str]:
         }
     words: set[str] = set()
     for key, lst in data.items():
-        if key.startswith("_"):  # skip comment keys
+        if key.startswith("_"):
             continue
         if isinstance(lst, list):
-            words.update(w.lower().strip() for w in lst if isinstance(w, str))
+            words.update(
+                w.lower().strip() for w in lst if isinstance(w, str)
+            )
     return words
 
 
@@ -46,9 +50,9 @@ def anime_title_case(text: str) -> str:
     and short English prepositions in lowercase (matching AniList style).
 
     Rules:
-      * First word is always capitalised.
-      * Words in the particles JSON are kept lowercase unless they are first.
-      * All other words are capitalised.
+      - First word is always capitalised.
+      - Words in the particles JSON are kept lowercase unless they are first.
+      - All other words are capitalised.
 
     Example:
         "honzuki no gekokujou shisho ni naru tame ni wa"
@@ -81,7 +85,6 @@ class Romaniser:
     def __init__(self) -> None:
         try:
             import pykakasi
-
             self._kks = pykakasi.kakasi()
             self._available = True
         except ImportError:
@@ -124,3 +127,8 @@ class Romaniser:
 
 # Singleton — shared across all fetchers
 _romaniser = Romaniser()
+
+
+def get_romaniser() -> Romaniser:
+    """Return the shared Romaniser singleton."""
+    return _romaniser

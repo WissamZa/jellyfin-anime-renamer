@@ -1,21 +1,21 @@
 """
-tmdb.py — TMDB (The Movie Database) provider.
-
-Uses the TMDB v3 API to:
-  1. Search for TV series by name
-  2. Fetch episode lists per season with titles
-  3. Enrich with Japanese titles via romanisation
-
-Requires TMDB_API_KEY (free at themoviedb.org).
+providers.tmdb — TMDBFetcher, TMDBSearch, and Episode Groups support.
 """
 
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from renamer.config import Config, log
-from renamer.providers.base import EpisodeFetcher, EpisodeInfo, SeriesSearchResult
-from renamer.romaniser import _romaniser
+from renamer.config import Config, get_logger
+from renamer.providers.base import (
+    EpisodeFetcher,
+    EpisodeGroupInfo,
+    EpisodeInfo,
+    SeriesSearchResult,
+)
+from renamer.romaniser import get_romaniser
+
+log = get_logger()
 
 
 class TMDBSearch:
@@ -28,6 +28,8 @@ class TMDBSearch:
 
     def __init__(self, api_key: str):
         self._params = {"api_key": api_key}
+        # Use a throwaway fetcher just for its _get helper
+        self._fetcher = _TMDBGetHelper()
 
     def find(self, name: str) -> Optional[tuple[int, str]]:
         """
@@ -38,7 +40,7 @@ class TMDBSearch:
           2. pykakasi romanisation of TMDB Japanese title
           3. TMDB English title (last resort)
         """
-        data = EpisodeFetcher._get(
+        data = self._fetcher._get(
             f"{self.BASE}/search/tv",
             {**self._params, "query": name, "language": "en-US"},
         )
@@ -53,9 +55,10 @@ class TMDBSearch:
         en_name = top["name"]
 
         ja_name = self._fetch_japanese_name(tmdb_id) or en_name
-        tmdb_romaji = _romaniser.to_romaji(ja_name)
+        romaniser = get_romaniser()
+        tmdb_romaji = romaniser.to_romaji(ja_name)
 
-        # Cross-reference with AniList/Kitsu for the best romaji
+        # Cross-reference with AniList and pick the best romaji
         from renamer.providers.romaji_resolver import RomajiResolver
         resolver = RomajiResolver()
         romaji = resolver.resolve(
@@ -68,7 +71,7 @@ class TMDBSearch:
         return tmdb_id, romaji
 
     def _fetch_japanese_name(self, series_id: int) -> Optional[str]:
-        data = EpisodeFetcher._get(
+        data = self._fetcher._get(
             f"{self.BASE}/tv/{series_id}",
             {**self._params, "language": "ja"},
         )
@@ -77,23 +80,283 @@ class TMDBSearch:
         return None
 
 
+class _TMDBGetHelper(EpisodeFetcher):
+    """Minimal fetcher subclass just to get _get() for TMDBSearch."""
+    name = "TMDBSearchHelper"
+
+    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+        return None
+
+    def fetch_specials(self) -> dict[int, EpisodeInfo]:
+        return {}
+
+
 class TMDBFetcher(EpisodeFetcher):
-    """TMDB episode metadata fetcher."""
+    """Fetches episode data from TMDB, with Episode Groups support."""
 
     name = "TMDB"
     BASE = "https://api.themoviedb.org/3"
 
-    def __init__(self, api_key: str, series_id: int, cfg: Optional[Config] = None):
+    def __init__(
+        self,
+        api_key: str,
+        series_id: int,
+        cfg: Optional[Config] = None,
+    ):
+        super().__init__()
         self._key = api_key
         self._series_id = series_id
         self._params = {"api_key": api_key}
         self._cfg = cfg or Config()
         self._has_specials = True
+        self._group_specials: dict[int, EpisodeInfo] = {}
 
+    # ── Episode Groups ──────────────────────────────────────
+    def fetch_episode_groups(self) -> list[EpisodeGroupInfo]:
+        """
+        Fetch the list of available episode groups for this series.
+
+        TMDB episode groups let users reorganise episodes into custom
+        season structures (e.g. "Absolute Order" for long-running anime
+        like One Piece).
+        """
+        data = self._get(
+            f"{self.BASE}/tv/{self._series_id}/episode_groups",
+            self._params,
+            cfg=self._cfg,
+        )
+        if not data:
+            log.info("No episode groups found for TMDB id=%d", self._series_id)
+            return []
+
+        groups: list[EpisodeGroupInfo] = []
+        for g in data.get("results", []):
+            groups.append(EpisodeGroupInfo(
+                id=g.get("id", ""),
+                name=g.get("name", "Unnamed"),
+                description=g.get("description", ""),
+                episode_count=g.get("episode_count", 0),
+                group_count=g.get("group_count", 0),
+                type=g.get("type", 0),
+            ))
+
+        log.info(
+            "TMDB: found %d episode group(s) for id=%d",
+            len(groups), self._series_id,
+        )
+        return groups
+
+    def fetch_episode_group_details(
+        self, group_id: str,
+    ) -> Optional[dict[int, EpisodeInfo]]:
+        """
+        Fetch the full episode group details and build an episode map.
+
+        Each "group" within the episode group represents a season in the
+        custom ordering.  Episodes within a group have an `order` field
+        for their position within that group, plus the original TMDB
+        `episode_number` and `season_number`.
+
+        Specials groups (named "Specials" or containing only season 0
+        episodes) are separated into ``self._group_specials`` so that
+        ``fetch_specials()`` can return them instead of hitting the
+        regular Season 0 API.
+        """
+        data = self._get(
+            f"{self.BASE}/tv/episode_group/{group_id}",
+            self._params,
+            cfg=self._cfg,
+        )
+        if not data:
+            log.error(
+                "Could not fetch episode group '%s' — falling back.",
+                group_id,
+            )
+            return None
+
+        group_name = data.get("name", "Unknown Group")
+        groups = data.get("groups", [])
+        log.info(
+            "Episode group '%s': %d sub-group(s), type=%d",
+            group_name, len(groups), data.get("type", 0),
+        )
+
+        romaniser = get_romaniser()
+        mapping: dict[int, EpisodeInfo] = {}
+        abs_counter = 1       # counts only regular episodes
+        special_counter = 1   # counts only specials
+        self._group_specials = {}
+
+        # Fetch Japanese titles for each original season to merge
+        # (episode groups only return English by default)
+        ja_titles = self._prefetch_ja_titles_for_groups(groups)
+
+        for group in groups:
+            episodes = group.get("episodes", [])
+            gname = group.get("name", "").strip()
+
+            # ── Determine season number ──────────────────────
+            # The group's "order" field is the 0-based position of
+            # this sub-group within the episode group, NOT the season
+            # number.  We must derive the season from the name or
+            # from the episodes' original season_number values.
+            is_specials_group = False
+
+            # Check 1: group name clearly indicates specials
+            if re.search(r"\bspecials?\b", gname, re.IGNORECASE):
+                is_specials_group = True
+                season_num = 0
+            else:
+                # Check 2: all episodes in this group have season_number==0
+                orig_seasons = {ep.get("season_number", -1) for ep in episodes}
+                if orig_seasons == {0}:
+                    is_specials_group = True
+                    season_num = 0
+                else:
+                    # Check 3: extract season number from group name
+                    sm = re.search(r"(\d+)", gname)
+                    if sm:
+                        season_num = int(sm.group(1))
+                    else:
+                        # Last resort: use the group's order field + 1
+                        # (order is 0-based position, not season number)
+                        season_num = (group.get("order", 0) or 0) + 1
+
+            log.info(
+                "  Group '%s' (season %d%s): %d episodes",
+                gname, season_num,
+                ", specials" if is_specials_group else "",
+                len(episodes),
+            )
+
+            for i, ep in enumerate(episodes):
+                # Episode position within this group (1-based).
+                # TMDB's `order` field is 0-based, so we use enumerate
+                # instead of the buggy `order or episode_number` logic.
+                ep_order = i + 1
+
+                ep_title = ep.get("name", f"Episode {abs_counter}")
+
+                # Try to find Japanese title from our prefetch
+                orig_season = ep.get("season_number", 0)
+                orig_ep = ep.get("episode_number", 0)
+                ja_title = ja_titles.get((orig_season, orig_ep), "")
+                if ja_title:
+                    ep_title = romaniser.to_romaji(ja_title)
+
+                if is_specials_group:
+                    info = EpisodeInfo(
+                        absolute=special_counter,
+                        season=0,
+                        episode=ep_order,
+                        title=ep_title,
+                        air_date=ep.get("air_date", ""),
+                        overview=ep.get("overview", ""),
+                        source=f"{self.name} (Group: {group_name})",
+                        is_special=True,
+                    )
+                    self._group_specials[ep_order] = info
+                    special_counter += 1
+                else:
+                    info = EpisodeInfo(
+                        absolute=abs_counter,
+                        season=season_num,
+                        episode=ep_order,
+                        title=ep_title,
+                        air_date=ep.get("air_date", ""),
+                        overview=ep.get("overview", ""),
+                        source=f"{self.name} (Group: {group_name})",
+                        is_special=False,
+                    )
+                    mapping[abs_counter] = info
+                    abs_counter += 1
+
+        if self._group_specials:
+            self._has_specials = True
+
+        log.info(
+            "Episode group '%s': mapped %d episodes, %d specials.",
+            group_name, len(mapping), len(self._group_specials),
+        )
+        return mapping
+
+    def _prefetch_ja_titles_for_groups(
+        self, groups: list[dict],
+    ) -> dict[tuple[int, int], str]:
+        """
+        Pre-fetch Japanese episode titles for all original seasons
+        referenced by the episode group, so we can romanise them.
+        Returns {(orig_season, orig_ep): ja_title}.
+        """
+        # Collect all unique original seasons referenced (including 0/specials)
+        orig_seasons: set[int] = set()
+        for group in groups:
+            for ep in group.get("episodes", []):
+                sn = ep.get("season_number", -1)
+                if sn >= 0:
+                    orig_seasons.add(sn)
+
+        if not orig_seasons:
+            return {}
+
+        ja_titles: dict[tuple[int, int], str] = {}
+
+        def fetch_ja_season(sn: int) -> dict[tuple[int, int], str]:
+            url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
+            data = self._get(url, {**self._params, "language": "ja"}, cfg=self._cfg)
+            result: dict[tuple[int, int], str] = {}
+            if data:
+                for ep in data.get("episodes", []):
+                    en = ep.get("episode_number", 0)
+                    name = ep.get("name", "")
+                    if name:
+                        result[(sn, en)] = name
+            return result
+
+        with ThreadPoolExecutor(max_workers=self._cfg.MAX_WORKERS) as pool:
+            futures = {
+                pool.submit(fetch_ja_season, sn): sn
+                for sn in orig_seasons
+            }
+            for future in as_completed(futures):
+                try:
+                    ja_titles.update(future.result())
+                except Exception as exc:
+                    log.warning("Failed to fetch JA titles: %s", exc)
+
+        return ja_titles
+
+    # ── Main fetch ──────────────────────────────────────────
     def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+        """
+        Fetch episode data.  If an episode group ID is configured,
+        use that instead of the default season structure.
+        """
+        # If an episode group is set, use it
+        if self._cfg and self._cfg.EPISODE_GROUP_ID:
+            group_id = self._cfg.EPISODE_GROUP_ID
+            log.info(
+                "Using episode group '%s' for TMDB id=%d",
+                group_id, self._series_id,
+            )
+            result = self.fetch_episode_group_details(group_id)
+            if result:
+                return result
+            log.warning(
+                "Episode group '%s' failed — falling back to default.",
+                group_id,
+            )
+
+        # Default: fetch by season
+        return self._fetch_by_season()
+
+    def _fetch_by_season(self) -> Optional[dict[int, EpisodeInfo]]:
+        """Fetch episodes using the default TMDB season structure."""
         log.info("TMDB — fetching series id=%s …", self._series_id)
         show = self._get(
-            f"{self.BASE}/tv/{self._series_id}", self._params, cfg=self._cfg
+            f"{self.BASE}/tv/{self._series_id}",
+            self._params,
+            cfg=self._cfg,
         )
         if not show:
             return None
@@ -101,57 +364,51 @@ class TMDBFetcher(EpisodeFetcher):
         self._has_specials = any(
             s.get("season_number") == 0 for s in show.get("seasons", [])
         )
-        seasons = [s for s in show.get("seasons", []) if s["season_number"] > 0]
-        log.info("Found %d seasons — fetching episodes in parallel …", len(seasons))
+        seasons = [
+            s for s in show.get("seasons", []) if s["season_number"] > 0
+        ]
+        log.info(
+            "Found %d seasons — fetching episodes in parallel …", len(seasons)
+        )
 
         season_data: dict[int, list] = {}
+        romaniser = get_romaniser()
 
-        def fetch_season_en(s: dict) -> tuple[int, list]:
+        def fetch_season(s: dict) -> tuple[int, list]:
             sn = s["season_number"]
             url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
-            data = self._get(url, self._params, cfg=self._cfg)
-            if not data:
-                log.warning(
-                    "TMDB: failed to fetch season %d (English) — will retry once", sn
-                )
-                data = self._get(url, self._params, cfg=self._cfg)
-            eps = data.get("episodes", []) if data else []
-            if not eps:
-                log.warning("TMDB: season %d returned 0 episodes", sn)
-            return sn, sorted(eps, key=lambda x: x["episode_number"])
+            ja_params = {**self._params, "language": "ja"}
+            data_ja = self._get(url, ja_params, cfg=self._cfg)
+            data_en = self._get(url, self._params, cfg=self._cfg)
+            eps_ja = {
+                e["episode_number"]: e
+                for e in (data_ja or {}).get("episodes", [])
+            }
+            eps_en = (data_en or {}).get("episodes", [])
+            merged = []
+            for ep in eps_en:
+                ep_num = ep["episode_number"]
+                ja_ep = eps_ja.get(ep_num, {})
+                ja_title = ja_ep.get("name", "")
+                if ja_title:
+                    ep["name"] = romaniser.to_romaji(ja_title)
+                merged.append(ep)
+            return sn, sorted(merged, key=lambda x: x["episode_number"])
 
         with ThreadPoolExecutor(max_workers=self._cfg.MAX_WORKERS) as pool:
-            futures = {pool.submit(fetch_season_en, s): s for s in seasons}
+            futures = {pool.submit(fetch_season, s): s for s in seasons}
             for future in as_completed(futures):
                 sn, eps = future.result()
                 season_data[sn] = eps
 
-        def enrich_with_ja_titles(sn: int, eps: list) -> list:
-            url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
-            data_ja = self._get(url, {**self._params, "language": "ja"}, cfg=self._cfg)
-            if not data_ja:
-                return eps
-            ja_map = {
-                e["episode_number"]: e.get("name", "")
-                for e in data_ja.get("episodes", [])
-            }
-            for ep in eps:
-                ja_title = ja_map.get(ep["episode_number"], "")
-                if ja_title:
-                    ep["name"] = _romaniser.to_romaji(ja_title)
-            return eps
-
-        for sn in sorted(season_data):
-            season_data[sn] = enrich_with_ja_titles(sn, season_data[sn])
-
         mapping: dict[int, EpisodeInfo] = {}
         abs_counter = 1
         for sn in sorted(season_data):
-            for pos, ep in enumerate(season_data[sn], start=1):
+            for ep in season_data[sn]:
                 mapping[abs_counter] = EpisodeInfo(
                     absolute=abs_counter,
                     season=sn,
-                    episode=pos,
+                    episode=ep["episode_number"],
                     title=ep.get("name", ""),
                     air_date=ep.get("air_date", ""),
                     overview=ep.get("overview", ""),
@@ -164,8 +421,18 @@ class TMDBFetcher(EpisodeFetcher):
         return mapping
 
     def fetch_specials(self) -> dict[int, EpisodeInfo]:
+        # If we already extracted specials from an episode group, use those
+        if self._group_specials:
+            log.info(
+                "TMDB: using %d special(s) from episode group.",
+                len(self._group_specials),
+            )
+            return self._group_specials
+
         if not self._has_specials:
-            log.info("No specials (Season 0) listed for this series on TMDB.")
+            log.info(
+                "No specials (Season 0) listed for this series on TMDB."
+            )
             return {}
 
         log.info("TMDB — fetching specials (Season 0) …")
@@ -175,6 +442,7 @@ class TMDBFetcher(EpisodeFetcher):
             log.info("No specials found on TMDB.")
             return {}
 
+        romaniser = get_romaniser()
         specials: dict[int, EpisodeInfo] = {}
         for ep in data.get("episodes", []):
             ep_num = ep["episode_number"]
@@ -182,7 +450,9 @@ class TMDBFetcher(EpisodeFetcher):
                 absolute=ep_num,
                 season=0,
                 episode=ep_num,
-                title=_romaniser.to_romaji(ep.get("name", f"Special {ep_num}")),
+                title=romaniser.to_romaji(
+                    ep.get("name", f"Special {ep_num}")
+                ),
                 air_date=ep.get("air_date", ""),
                 overview=ep.get("overview", ""),
                 source=self.name,

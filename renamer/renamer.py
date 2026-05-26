@@ -1,20 +1,19 @@
 """
-renamer.py — Main renaming engine.
-
-Uses the provider registry to create fetchers and resolve series names,
-then processes files according to the episode map.
+renamer — AnimeRenamer (main engine).
 """
 
 import re
+from pathlib import Path
 from typing import Callable, Optional
 
 from renamer.cache import SeriesCache
-from renamer.config import Config, Provider, log
+from renamer.config import Config, Provider, get_logger
 from renamer.history import RenameHistory
 from renamer.parsers import EpisodeNumberParser, SpecialParser
-from renamer.providers.base import EpisodeInfo, RenameResult
-from renamer.providers.registry import ProviderRegistry
-from renamer.providers.base import SeriesSearchResult
+from renamer.providers.base import EpisodeGroupInfo, EpisodeInfo, RenameResult
+from renamer.providers.registry import get_registry
+
+log = get_logger()
 
 
 class AnimeRenamer:
@@ -48,20 +47,40 @@ class AnimeRenamer:
                 log.error("Config error: %s", e)
             return []
 
+        # Try to load cached series info
         cache = SeriesCache(self._cfg.MEDIA_DIR)
+        cached = cache.load()
+        if cached:
+            log.info("Loaded series cache: %s", cached.get("series_name"))
+            # Fill in any missing IDs from cache
+            if not self._cfg.TMDB_SERIES_ID and cached.get("tmdb_series_id"):
+                self._cfg.TMDB_SERIES_ID = cached["tmdb_series_id"]
+            if not self._cfg.ANILIST_ID and cached.get("anilist_id"):
+                self._cfg.ANILIST_ID = cached["anilist_id"]
+            if not self._cfg.KITSU_ID and cached.get("kitsu_id"):
+                self._cfg.KITSU_ID = cached["kitsu_id"]
+            if not self._cfg.SERIES_NAME and cached.get("series_name"):
+                self._cfg.SERIES_NAME = cached["series_name"]
+            if isinstance(cached.get("provider"), Provider):
+                self._cfg.provider = cached["provider"]
+            if not self._cfg.EPISODE_GROUP_ID and cached.get("episode_group_id"):
+                self._cfg.EPISODE_GROUP_ID = cached["episode_group_id"]
 
-        # ── Step 1: Try loading from folder cache ──────────────────
-        self._load_cache(cache)
+        # Use series folder name as default if still unset
+        if not self._cfg.SERIES_NAME:
+            self._cfg.SERIES_NAME = self._cfg.MEDIA_DIR.name
 
-        # ── Step 2: If still unresolved, search using the provider registry ─
-        if self._needs_resolve():
-            self._resolve_via_registry(cache)
+        # Auto-search for series ID if missing
+        self._auto_search_series()
 
-        # ── Step 3: Build the episode map using the provider registry ──────
-        try:
-            fetcher = ProviderRegistry.create_fetcher(self._cfg)
-        except ValueError as e:
-            log.error("%s", e)
+        # Create fetcher via registry
+        registry = get_registry()
+        fetcher = registry.create_fetcher(self._cfg.provider, self._cfg)
+        if fetcher is None:
+            log.error(
+                "Could not create fetcher for provider: %s",
+                self._cfg.provider.value,
+            )
             return []
 
         episode_map = fetcher.fetch()
@@ -70,6 +89,19 @@ class AnimeRenamer:
         if not episode_map:
             log.error("Could not build episode map — aborting.")
             return []
+
+        # Save cache with resolved IDs
+        cache.save(
+            series_name=self._cfg.SERIES_NAME,
+            provider=self._cfg.provider,
+            tmdb_series_id=self._cfg.TMDB_SERIES_ID,
+            anilist_id=self._cfg.ANILIST_ID,
+            kitsu_id=self._cfg.KITSU_ID,
+            episode_group_id=self._cfg.EPISODE_GROUP_ID,
+        )
+
+        # Cross-reference IDs across providers for cache completeness
+        self._cross_reference_ids()
 
         return self._process_files(episode_map, specials_map, dry_run)
 
@@ -104,272 +136,228 @@ class AnimeRenamer:
         self._history.clear_entries(restored_keys)
         log.info("Restored %d file(s). Skipped %d.", restored, skipped_count)
 
-    # ── cache & resolve helpers ────────────────────────────
+    # ── Auto-search ──────────────────────────────────────
+    def _auto_search_series(self) -> None:
+        """
+        If the active provider's series ID is missing, search by
+        SERIES_NAME automatically and fill it in.
 
-    def _needs_resolve(self) -> bool:
-        """Check if the current provider's ID is still unresolved."""
-        provider = self._cfg.PROVIDER
-        if provider == Provider.TMDB and self._cfg.TMDB_SERIES_ID is None:
-            return True
-        if provider == Provider.AniList and self._cfg.ANILIST_ID is None:
-            return True
-        if provider == Provider.Kitsu and self._cfg.KITSU_ID is None:
-            return True
-        return False
-
-    def _load_cache(self, cache: SeriesCache) -> None:
-        """Load cached series info and apply it to the config."""
-        if not self._needs_resolve():
+        This is non-interactive (always picks the top result) and
+        silently does nothing on failure.
+        """
+        name = self._cfg.SERIES_NAME
+        if not name:
             return
 
-        cached = cache.load()
-        if not cached:
-            return
+        registry = get_registry()
 
-        cached_provider = cached.get("provider", Provider.TMDB)
-        self._cfg.SERIES_NAME = cached["series_name"]
+        # TMDB: need TMDB_SERIES_ID
+        if (
+            self._cfg.provider == Provider.TMDB
+            and not self._cfg.TMDB_SERIES_ID
+            and self._cfg.TMDB_API_KEY
+        ):
+            log.info("Auto-searching TMDB for '%s' …", name)
+            result = registry.search(Provider.TMDB, name, self._cfg)
+            if result:
+                self._cfg.TMDB_SERIES_ID = result.series_id
+                if result.series_name:
+                    self._cfg.SERIES_NAME = result.series_name
+                log.info(
+                    "Auto-found: '%s' (TMDB ID %d)",
+                    self._cfg.SERIES_NAME, self._cfg.TMDB_SERIES_ID,
+                )
+            else:
+                log.warning("TMDB auto-search returned nothing for '%s'.", name)
 
-        if cached.get("tmdb_series_id"):
-            self._cfg.TMDB_SERIES_ID = cached["tmdb_series_id"]
-        if cached.get("anilist_id"):
-            self._cfg.ANILIST_ID = cached["anilist_id"]
-        if cached.get("kitsu_id"):
-            self._cfg.KITSU_ID = cached["kitsu_id"]
-
-        # If the cached provider differs from the current one, switch
-        if cached_provider != self._cfg.PROVIDER:
-            log.info(
-                "Cache provider (%s) differs from configured (%s) — switching to cached",
-                cached_provider.value,
-                self._cfg.PROVIDER.value,
-            )
-            self._cfg.PROVIDER = cached_provider
-
-        log.info(
-            "Series cache hit -> '%s' (provider=%s, TMDB id=%s, AniList id=%s, Kitsu id=%s) — skipping API search",
-            self._cfg.SERIES_NAME,
-            self._cfg.PROVIDER.value,
-            self._cfg.TMDB_SERIES_ID,
-            self._cfg.ANILIST_ID,
-            self._cfg.KITSU_ID,
-        )
-
-    def _resolve_via_registry(self, cache: SeriesCache) -> None:
-        """
-        Resolve series metadata using the provider registry.
-
-        This replaces the old per-provider _resolve_via_*() methods
-        with a single, generic flow:
-          1. Search using the registry
-          2. Apply the result to config
-          3. Cross-reference with other providers for cache completeness
-          4. Save to cache
-        """
-        try:
-            result = ProviderRegistry.search(self._cfg)
-        except ValueError as e:
-            log.error("%s", e)
-            return
-
-        if not result:
-            log.error(
-                "Could not find '%s' on %s — aborting.",
-                self._cfg.SERIES_NAME,
-                self._cfg.PROVIDER.value,
-            )
-            return
-
-        # Apply the search result
-        self._apply_search_result(result)
-
-        log.info(
-            "Resolved via %s -> ID: %d  Series name: '%s'",
-            result.provider_name,
-            result.provider_id,
-            result.series_name,
-        )
-
-        # Cross-reference with other providers for cache completeness
-        self._cross_reference_ids()
-
-        # Save to cache
-        cache.save(
-            series_name=self._cfg.SERIES_NAME,
-            provider=self._cfg.PROVIDER,
-            tmdb_series_id=self._cfg.TMDB_SERIES_ID,
-            anilist_id=self._cfg.ANILIST_ID,
-            kitsu_id=self._cfg.KITSU_ID,
-        )
-
-    def _apply_search_result(self, result: SeriesSearchResult) -> None:
-        """Apply a search result's ID and name to the config."""
-        self._cfg.SERIES_NAME = result.series_name
-
-        provider = self._cfg.PROVIDER
-        if provider == Provider.TMDB:
-            self._cfg.TMDB_SERIES_ID = result.provider_id
-        elif provider == Provider.AniList:
-            self._cfg.ANILIST_ID = result.provider_id
-        elif provider == Provider.Kitsu:
-            self._cfg.KITSU_ID = result.provider_id
-
-    def _cross_reference_ids(self) -> None:
-        """
-        Try to resolve IDs from other providers for cache completeness.
-
-        This means a Kitsu-resolved series will also have AniList/TMDB IDs
-        in the cache, making provider switches seamless.
-        """
-        provider = self._cfg.PROVIDER
-        series_name = self._cfg.SERIES_NAME
-
-        # Try AniList if not already resolved
-        if self._cfg.ANILIST_ID is None:
+        # AniList: need ANILIST_ID
+        if (
+            self._cfg.provider == Provider.AniList
+            and not self._cfg.ANILIST_ID
+        ):
+            log.info("Auto-searching AniList for '%s' …", name)
             try:
                 from renamer.providers.anilist import AniListFetcher
-                al = AniListFetcher()
-                al_id = al.find_id(series_name)
-                if al_id:
-                    self._cfg.ANILIST_ID = al_id
-                    log.info("Cross-ref: resolved AniList ID: %d", al_id)
-            except Exception:
-                pass
+                af = AniListFetcher()
+                aid = af.find_id(name)
+                if aid:
+                    self._cfg.ANILIST_ID = aid
+                    romaji = af.find_romaji(name)
+                    if romaji:
+                        self._cfg.SERIES_NAME = romaji
+                    log.info(
+                        "Auto-found: '%s' (AniList ID %d)",
+                        self._cfg.SERIES_NAME, self._cfg.ANILIST_ID,
+                    )
+            except Exception as exc:
+                log.warning("AniList auto-search failed: %s", exc)
 
-        # Try TMDB if not already resolved and we have an API key
-        if self._cfg.TMDB_SERIES_ID is None and self._cfg.TMDB_API_KEY:
-            try:
-                from renamer.providers.tmdb import TMDBSearch
-                searcher = TMDBSearch(self._cfg.TMDB_API_KEY)
-                tmdb_result = searcher.find(series_name)
-                if tmdb_result:
-                    self._cfg.TMDB_SERIES_ID = tmdb_result[0]
-                    log.info("Cross-ref: resolved TMDB ID: %d", self._cfg.TMDB_SERIES_ID)
-            except Exception:
-                pass
-
-        # Try Kitsu if not already resolved
-        if self._cfg.KITSU_ID is None:
+        # Kitsu: need KITSU_ID
+        if (
+            self._cfg.provider == Provider.Kitsu
+            and not self._cfg.KITSU_ID
+        ):
+            log.info("Auto-searching Kitsu for '%s' …", name)
             try:
                 from renamer.providers.kitsu import KitsuFetcher
-                kf = KitsuFetcher()
-                kf_result = kf.find_series(series_name)
-                if kf_result:
-                    self._cfg.KITSU_ID = kf_result[0]
-                    log.info("Cross-ref: resolved Kitsu ID: %d", self._cfg.KITSU_ID)
+                kf = KitsuFetcher(None, self._cfg)
+                result = kf.find_series(name)
+                if result:
+                    self._cfg.KITSU_ID, romaji = result
+                    self._cfg.SERIES_NAME = romaji
+                    log.info(
+                        "Auto-found: '%s' (Kitsu ID %d)",
+                        self._cfg.SERIES_NAME, self._cfg.KITSU_ID,
+                    )
+            except Exception as exc:
+                log.warning("Kitsu auto-search failed: %s", exc)
+
+    # ── Episode Group listing ────────────────────────────
+    def list_episode_groups(self) -> list[EpisodeGroupInfo]:
+        """
+        List available TMDB episode groups for the current series.
+        Only works with the TMDB provider.
+        """
+        if self._cfg.provider != Provider.TMDB:
+            log.warning(
+                "Episode groups are a TMDB-only feature. "
+                "Current provider: %s", self._cfg.provider.value,
+            )
+            return []
+
+        if not self._cfg.TMDB_API_KEY or not self._cfg.TMDB_SERIES_ID:
+            log.error(
+                "TMDB API key and series ID are required for episode groups."
+            )
+            return []
+
+        from renamer.providers.tmdb import TMDBFetcher
+        fetcher = TMDBFetcher(
+            self._cfg.TMDB_API_KEY,
+            self._cfg.TMDB_SERIES_ID,
+            self._cfg,
+        )
+        return fetcher.fetch_episode_groups()
+
+    # ── internals ────────────────────────────────────────
+    def _cross_reference_ids(self) -> None:
+        """Try to fill in missing provider IDs by cross-referencing."""
+        # If we have an AniList ID but no Kitsu ID, try to look up Kitsu
+        # This is best-effort; failures are silently ignored.
+        if self._cfg.ANILIST_ID and not self._cfg.KITSU_ID:
+            try:
+                from renamer.providers.kitsu import KitsuFetcher
+                kf = KitsuFetcher(None, self._cfg)
+                result = kf.find_series(self._cfg.SERIES_NAME)
+                if result:
+                    self._cfg.KITSU_ID = result[0]
+                    log.info("Cross-ref: found Kitsu ID %d", self._cfg.KITSU_ID)
             except Exception:
                 pass
 
-    # ── internals ────────────────────────────────────────
-    def _season_folder(self, season: int) -> "Path":
-        from pathlib import Path
+    def _season_folder(self, season: int) -> Path:
         name = (
-            self._cfg.SPECIALS_FOLDER_NAME
+            self._sanitize_name(self._cfg.SPECIALS_FOLDER_NAME)
             if season == 0
-            else self._cfg.SEASON_FOLDER_TEMPLATE.format(season=season)
+            else self._sanitize_name(
+                self._cfg.SEASON_FOLDER_TEMPLATE.format(season=season)
+            )
         )
         folder = self._cfg.MEDIA_DIR / name
         folder.mkdir(exist_ok=True)
         return folder
 
+    @staticmethod
+    def _clean_special_title(title: str) -> str:
+        """
+        Strip release-group brackets and codec noise from special filenames,
+        but keep meaningful content like (Memory Snow).
+        """
+        # Remove [Group] [1080p] style brackets
+        cleaned = re.sub(r"\[(?:[^\]]*?(?:1080p|720p|480p|HEVC|x264|x265|AV1|WEB|BD|DVD|[0-9]+bit|[A-Z]{2,5}-(?:RIP|release)))\]", "", title, flags=re.IGNORECASE)
+        # Remove standalone codec/resolution tags
+        cleaned = re.sub(r"\b(?:1080p|720p|480p|HEVC|x264|x265|AV1)\b", "", cleaned, flags=re.IGNORECASE)
+        # Collapse multiple spaces
+        cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+        # Remove leading/trailing hyphens and spaces
+        cleaned = cleaned.strip(" -_")
+        return cleaned
+
+    @staticmethod
+    def _sanitize_name(name: str) -> str:
+        """
+        Remove characters that are invalid in filenames or cause
+        problems with Jellyfin scanning.
+
+        Strips:  \\ / : * ? " < > |  (filesystem-illegal on Windows)
+        Plus:    ;   (Jellyfin treats as separator)
+        Replaces:  — –   →   -   (normalise dashes)
+        Replaces:  …   →   ...
+        Collapses multiple spaces.
+        """
+        # Normalise unicode dashes to plain hyphen FIRST (before stripping)
+        cleaned = name.replace('\u2014', '-')   # em dash —
+        cleaned = cleaned.replace('\u2013', '-') # en dash –
+        cleaned = cleaned.replace('\u2012', '-') # figure dash
+        cleaned = cleaned.replace('\u2015', '-') # horizontal bar
+        # Normalise ellipsis
+        cleaned = cleaned.replace('\u2026', '...')  # …
+        # Remove filesystem-illegal and Jellyfin-confusing characters
+        cleaned = re.sub(r'[\\/*?:"<>|;]', '', cleaned)
+        # Remove other Unicode whitespace that can confuse Jellyfin
+        cleaned = re.sub(r'[\u00a0\u2000-\u200b\u2028\u2029\u3000]', ' ', cleaned)
+        # Collapse multiple spaces / hyphens
+        cleaned = re.sub(r' {2,}', ' ', cleaned)
+        cleaned = re.sub(r'-{2,}', '-', cleaned)
+        # Strip leading/trailing whitespace, dots, hyphens, underscores
+        cleaned = cleaned.strip(' .-_')
+        return cleaned
+
     def _format_name(self, info: EpisodeInfo, ext: str) -> str:
-        clean = re.sub(r'[\\/*?:"<>|]', "", info.title)
+        series = self._sanitize_name(self._cfg.SERIES_NAME)
+        clean = self._sanitize_name(info.title)
         if info.is_special:
+            ep_num = info.episode
             return self._cfg.SPECIAL_TEMPLATE.format(
-                series=self._cfg.SERIES_NAME,
-                episode=info.episode,
-                absolute=info.absolute,
+                series=series,
+                episode=ep_num,
                 title=clean,
                 ext=ext,
             )
 
-        # Long-running anime (e.g. One Piece, Naruto) use the absolute episode
-        # number as the episode field so e.g. episode 1163 renders as S23E1163
-        # rather than S23E01 (which would be meaningless to media managers).
-        #
-        # Threshold behaviour (ABSOLUTE_EPISODE_THRESHOLD in .env):
-        #   > 0  → use absolute when absolute > threshold  (default: 100)
-        #   = 0  → always use within-season numbering
-        #   < 0  → always use absolute numbering
-        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
-        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
-            episode_field = info.absolute
+        # Smart episode number width
+        if self._cfg.ABSOLUTE_NUMBERING:
+            ep_display = info.absolute
         else:
-            episode_field = info.episode
+            ep_display = info.episode
 
-        return self._cfg.NAME_TEMPLATE.format(
-            series=self._cfg.SERIES_NAME,
+        # Use wider format for large episode numbers
+        if ep_display >= 1000:
+            ep_fmt = f"{ep_display:04d}"
+        elif ep_display >= 100:
+            ep_fmt = f"{ep_display:03d}"
+        else:
+            ep_fmt = f"{ep_display:02d}"
+
+        # Build template with smart width
+        template = self._cfg.NAME_TEMPLATE
+        formatted = template.format(
+            series=series,
             season=info.season,
-            episode=episode_field,
-            absolute=info.absolute,
+            episode=ep_display,
             title=clean,
             ext=ext,
         )
+        # Fix the episode formatting: template uses {episode:02d} but we
+        # may need 3 or 4 digits.  Replace the E02d portion.
+        if ep_display >= 100:
+            formatted = re.sub(
+                r"E\d{2}(?=\s*-)",
+                f"E{ep_fmt}",
+                formatted,
+            )
 
-    @staticmethod
-    def _clean_special_title(stem: str, series_name: str = "") -> str:
-        """
-        Clean a special episode's filename stem into a readable title.
-
-        Strips release-group brackets, quality tags, SxxExx prefixes, and
-        the series name prefix so the result is just the episode title.
-
-        Examples:
-          [Judas] Re Zero - OVA (Memory Snow) [1080p][HEVC x265 10bit]
-          →  OVA (Memory Snow)
-
-          One Piece - S00E42 - [Judas] One Piece - SP42
-          →  SP42
-
-          [SubGroup] Naruto Shippuuden - Fan Letter [720p]
-          →  Fan Letter
-        """
-        import re as _re
-        cleaned = stem
-
-        # 1. Remove all bracketed tags: [Judas], [1080p], [HEVC x265 10bit], etc.
-        cleaned = _re.sub(r"\[[^\]]*\]", "", cleaned)
-
-        # 2. Remove parentheses containing ONLY technical noise
-        cleaned = _re.sub(
-            r"\((?:\d{3,4}p?|HEVC|x26\d|10bit|Multi-Subs|AAC|FLAC|BD|DVD|UNCEN|UNCUT)\s*\)",
-            "", cleaned, flags=_re.IGNORECASE,
-        )
-
-        # 3. Collapse whitespace early so anchor-based matches work reliably
-        #    (bracket removal in step 1 can leave leading/trailing spaces).
-        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
-
-        # 4. Strip SxxExx / S00Exx segment and everything before it.
-        #    e.g. "One Piece - S00E42 - One Piece - SP42" → "One Piece - SP42"
-        if _re.search(r"[Ss]\d+[Ee]\d+", cleaned):
-            cleaned = _re.sub(r".*?[Ss]\d+[Ee]\d+\s*[-–]?\s*", "", cleaned, count=1)
-
-        # 5. Strip any leading series-name prefix (case-insensitive).
-        #    Applied both when no SxxExx was present (raw torrent name) and
-        #    after step 3 in case the series name repeats after the tag.
-        #
-        #    The match is done word-by-word from the longest prefix down so
-        #    that a short-form in the filename ("Re Zero") still matches even
-        #    when the resolved name is longer ("Re Zero kara Hajimeru …").
-        if series_name:
-            # Build candidates: full name, then progressively shorter prefixes
-            # (stop at 2 words so we don't accidentally strip too little)
-            words = series_name.strip().split()
-            for n in range(len(words), 1, -1):
-                prefix = " ".join(words[:n])
-                escaped = _re.escape(prefix)
-                new_cleaned = _re.sub(
-                    rf"^{escaped}\s*[-–]?\s*", "", cleaned, flags=_re.IGNORECASE
-                )
-                if new_cleaned != cleaned:
-                    cleaned = new_cleaned
-                    break
-
-        # 6. Collapse whitespace and strip leading/trailing dashes
-        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
-        cleaned = _re.sub(r"^[-–\s]+|[-–\s]+$", "", cleaned).strip()
-
-        return cleaned if cleaned else stem
+        return formatted
 
     def _process_files(
         self,
@@ -391,12 +379,13 @@ class AnimeRenamer:
         )
         log.info("Scanning: %s | %s", media_dir, mode_label)
 
-        season_ep_map: dict[tuple[int, int], EpisodeInfo] = {
+        # Build mapping for quick lookup by (season, episode)
+        season_ep_map = {
             (ep.season, ep.episode): ep for ep in episode_map.values()
         }
 
-        # Track auto-incrementing special number for unnumbered specials (OVA, OAD, etc.)
-        _next_special_num: int = max(specials_map.keys(), default=0) + 1
+        # Track auto-assigned special numbers
+        next_auto_special = max(specials_map.keys(), default=0) + 1
 
         for path in files:
             if path.suffix.lower() not in self._cfg.VIDEO_EXTENSIONS:
@@ -404,69 +393,71 @@ class AnimeRenamer:
 
             sp_num = self._special.parse(path.name)
             if sp_num is not None:
-                # sp_num == 0 means "special detected but number unknown"
-                # → auto-assign the next available special number
+                # Auto-increment special numbers when sp_num == 0
                 if sp_num == 0:
-                    sp_num = _next_special_num
-                    _next_special_num += 1
+                    sp_num = next_auto_special
+                    next_auto_special += 1
 
                 info = specials_map.get(sp_num) or EpisodeInfo(
                     absolute=sp_num,
                     season=0,
                     episode=sp_num,
-                    title=self._clean_special_title(path.stem, self._cfg.SERIES_NAME),
+                    title=self._clean_special_title(path.stem),
                     source="filename",
                     is_special=True,
                 )
-                self._handle_file(path, info, dry_run, organize, results, session_history)
+                self._handle_file(
+                    path, info, dry_run, organize, results, session_history
+                )
                 continue
 
-            # Check for explicit season and episode
+            # Check explicit season and episode
             season_num, ep_num = self._parser.parse_season_episode(path.name)
             info = None
             if season_num is not None and ep_num is not None:
-                info = season_ep_map.get((season_num, ep_num))
-
-                # ── Absolute-number fallback ───────────────────────────────
-                # Files from long-running anime (One Piece, Naruto, etc.) are
-                # commonly named with the absolute episode number in the
-                # episode field, e.g. "One Piece - S22E1100.mkv".
-                # TMDB stores S22 with only ~50 within-season episodes, so
-                # the (season=22, episode=1100) lookup fails.  When the
-                # episode number exceeds the threshold we treat it as an
-                # absolute number and look it up in episode_map directly.
-                if not info:
-                    threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
-                    treat_as_absolute = (
-                        threshold < 0
-                        or (threshold > 0 and ep_num > threshold)
-                    )
-                    if treat_as_absolute and ep_num in episode_map:
-                        info = episode_map[ep_num]
-                        log.info(
-                            "S%02dE%d not in season map — matched as absolute ep %d",
-                            season_num, ep_num, ep_num,
+                if season_num == 0:
+                    # S00Exx — look up in specials map
+                    info = specials_map.get(ep_num)
+                    if info:
+                        self._handle_file(
+                            path, info, dry_run, organize,
+                            results, session_history,
                         )
+                        continue
+                    # Not in specials map — create a fallback special entry
+                    info = EpisodeInfo(
+                        absolute=ep_num,
+                        season=0,
+                        episode=ep_num,
+                        title=self._clean_special_title(path.stem),
+                        source="filename",
+                        is_special=True,
+                    )
+                    self._handle_file(
+                        path, info, dry_run, organize,
+                        results, session_history,
+                    )
+                    continue
 
-                # ── Season-overflow fallback ───────────────────────────────
-                # If the season number in the filename exceeds the highest
-                # season in the episode map (provider re-numbered seasons),
-                # try the episode under the last known season instead.
+                info = season_ep_map.get((season_num, ep_num))
                 if not info:
-                    max_season = max((s for s, e in season_ep_map.keys()), default=1)
-                    if season_num > max_season:
-                        info = season_ep_map.get((max_season, ep_num))
-                        if info:
-                            log.info(
-                                "Season %d > max season %d — mapped ep %d to S%02d",
-                                season_num, max_season, ep_num, max_season,
-                            )
-
-                if not info:
-                    log.warning("S%02dE%d not in episode map — skipped.", season_num, ep_num)
+                    max_season = max(
+                        (s for s, e in season_ep_map.keys()), default=0
+                    )
+                    log.warning(
+                        "S%02dE%02d not in episode map — skipped.%s",
+                        season_num, ep_num,
+                        (
+                            f"  (TMDB only has {max_season} season(s) "
+                            f"— try an Episode Group for more seasons)"
+                            if season_num > max_season
+                            else ""
+                        ),
+                    )
                     results.append(
                         RenameResult(
-                            path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
+                            path.name, "",
+                            EpisodeInfo(0, season_num, ep_num, ""),
                             skipped=True,
                         )
                     )
@@ -477,21 +468,32 @@ class AnimeRenamer:
                 if abs_num is None:
                     log.warning("Skipped (unrecognised): %s", path.name)
                     results.append(
-                        RenameResult(path.name, "", EpisodeInfo(0, 0, 0, ""), skipped=True)
+                        RenameResult(
+                            path.name, "",
+                            EpisodeInfo(0, 0, 0, ""),
+                            skipped=True,
+                        )
                     )
                     continue
 
                 if abs_num not in episode_map:
-                    log.warning("Ep %d not in episode map — skipped.", abs_num)
+                    log.warning(
+                        "Ep %d not in episode map — skipped.", abs_num
+                    )
                     results.append(
                         RenameResult(
-                            path.name, "", EpisodeInfo(abs_num, 0, 0, ""), skipped=True
+                            path.name, "",
+                            EpisodeInfo(abs_num, 0, 0, ""),
+                            skipped=True,
                         )
                     )
                     continue
                 info = episode_map[abs_num]
 
-            self._handle_file(path, info, dry_run, organize, results, session_history)
+            self._handle_file(
+                path, info, dry_run, organize,
+                results, session_history,
+            )
 
         done = sum(1 for r in results if r.success)
         skipped = sum(1 for r in results if r.skipped)
@@ -509,7 +511,7 @@ class AnimeRenamer:
 
     def _handle_file(
         self,
-        path,
+        path: Path,
         info: EpisodeInfo,
         dry_run: bool,
         organize: bool,
@@ -522,15 +524,18 @@ class AnimeRenamer:
             dest_folder = (
                 self._season_folder(info.season)
                 if not dry_run
-                else self._cfg.MEDIA_DIR
-                / (
+                else self._cfg.MEDIA_DIR / (
                     self._cfg.SPECIALS_FOLDER_NAME
                     if info.season == 0
-                    else self._cfg.SEASON_FOLDER_TEMPLATE.format(season=info.season)
+                    else self._cfg.SEASON_FOLDER_TEMPLATE.format(
+                        season=info.season
+                    )
                 )
             )
             dest_path = dest_folder / new_name
-            rel_key = str(dest_folder.relative_to(self._cfg.MEDIA_DIR) / new_name)
+            rel_key = str(
+                dest_folder.relative_to(self._cfg.MEDIA_DIR) / new_name
+            )
         else:
             dest_path = self._cfg.MEDIA_DIR / new_name
             rel_key = new_name
@@ -539,14 +544,9 @@ class AnimeRenamer:
             results.append(RenameResult(path.name, new_name, info, skipped=True))
             return
 
-        threshold = self._cfg.ABSOLUTE_EPISODE_THRESHOLD
-        if threshold < 0 or (threshold > 0 and info.absolute > threshold):
-            ep_display = info.absolute
-        else:
-            ep_display = info.episode
-
         season_tag = (
-            "SP" if info.is_special else f"S{info.season:02d}E{ep_display}"
+            "SP" if info.is_special
+            else f"S{info.season:02d}E{info.episode:02d}"
         )
         log.info(
             "%s  |  %s  ->  %s",

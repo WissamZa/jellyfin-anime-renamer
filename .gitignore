@@ -13,3 +13,4 @@ wheels/
 
 # Series cache (per-folder)
 .series_cache.json
+*.zip
