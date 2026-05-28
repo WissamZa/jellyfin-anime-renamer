@@ -38,14 +38,35 @@ from renamer.providers.registry import get_registry
 
 log = get_logger("qbit_hook")
 
+# Load global & series configuration from JSON
+import json
+def load_hook_config() -> dict:
+    conf_path = Path(__file__).resolve().parent / "qbit_hook.json"
+    if conf_path.exists():
+        try:
+            return json.loads(conf_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning("Could not read qbit_hook.json: %s", exc)
+    return {}
+
+HOOK_CONFIG = load_hook_config()
+HOOK_GLOBAL = HOOK_CONFIG.get("global", {})
+HOOK_SERIES = HOOK_CONFIG.get("series", {})
+
 # ═══════════════════════ CONFIG ══════════════════════════
 QBIT_URL = os.getenv("QBIT_URL", "http://localhost:8080")
 QBIT_USERNAME = os.getenv("QBIT_USERNAME", "")
 QBIT_PASSWORD = os.getenv("QBIT_PASSWORD", "")
 BASE_DOWNLOAD_PATH = Path(os.getenv("BASE_DOWNLOAD_PATH", "/mnt/D/Torrent"))
 
-# Active provider (from .env or default TMDB)
-ACTIVE_PROVIDER = Provider.from_str(os.getenv("PROVIDER", "tmdb"))
+# Active provider (from json, .env or default TMDB)
+ACTIVE_PROVIDER = Provider.from_str(HOOK_GLOBAL.get("provider", os.getenv("PROVIDER", "tmdb")))
+
+# Default episode start mode (per_season or continuing)
+EPISODE_START_MODE = HOOK_GLOBAL.get("episode_start_mode", os.getenv("EPISODE_START_MODE", "per_season"))
+
+# Use absolute episode numbering (True or False)
+ABSOLUTE_NUMBERING = HOOK_GLOBAL.get("absolute_numbering", os.getenv("ABSOLUTE_NUMBERING", "false").lower() == "true")
 
 # Regex to extract series name from a typical fansub torrent title:
 # "[SubGroup] Series Name (2024) - 1100 [1080p]"  ->  "Series Name"
@@ -304,35 +325,49 @@ def process_torrent(
 
     log.info("Series name: %s", series_name)
 
-    # 3. Build config with manual overrides from .env
-    tmdb_id_from_env = _parse_optional_int(
+    # 3. Build config with overrides from JSON & .env
+    # Check if there are series-specific config overrides in HOOK_SERIES
+    series_conf = HOOK_SERIES.get(series_name, {})
+    # If not found, try by Nyaa / official name if resolved, or lookup case-insensitive
+    if not series_conf:
+        for k, v in HOOK_SERIES.items():
+            if k.lower() == series_name.lower():
+                series_conf = v
+                break
+
+    tmdb_id_from_env = series_conf.get("tmdb_series_id") or _parse_optional_int(
         os.getenv("TMDB_SERIES_ID", "")
     )
-    anilist_id_from_env = _parse_optional_int(
+    anilist_id_from_env = series_conf.get("anilist_id") or _parse_optional_int(
         os.getenv("ANILIST_ID", "")
     )
-    kitsu_id_from_env = _parse_optional_int(
+    kitsu_id_from_env = series_conf.get("kitsu_id") or _parse_optional_int(
         os.getenv("KITSU_ID", "")
     )
-    series_name_from_env = os.getenv("SERIES_NAME", "").strip()
+    series_name_from_env = series_conf.get("series_name") or os.getenv("SERIES_NAME", "").strip()
 
-    # 4. Search provider for series ID — skip if already set in .env
+    # 4. Search provider for series ID — skip if already set
     official_name = series_name_from_env or series_name
     tmdb_id = tmdb_id_from_env
     anilist_id = anilist_id_from_env
     kitsu_id = kitsu_id_from_env
 
+    # Active provider for this series
+    provider = ACTIVE_PROVIDER
+    if "provider" in series_conf:
+        provider = Provider.from_str(series_conf["provider"])
+
     should_search = True
-    if ACTIVE_PROVIDER == Provider.TMDB and tmdb_id:
+    if provider == Provider.TMDB and tmdb_id:
         should_search = False
-    elif ACTIVE_PROVIDER == Provider.AniList and anilist_id:
+    elif provider == Provider.AniList and anilist_id:
         should_search = False
-    elif ACTIVE_PROVIDER == Provider.Kitsu and kitsu_id:
+    elif provider == Provider.Kitsu and kitsu_id:
         should_search = False
 
     if should_search:
         registry = get_registry()
-        search_result = registry.search(ACTIVE_PROVIDER, series_name, Config.from_env())
+        search_result = registry.search(provider, series_name, Config.from_env())
         if search_result:
             official_name = search_result.series_name or official_name
             if search_result.tmdb_id:
@@ -341,9 +376,9 @@ def process_torrent(
                 anilist_id = search_result.anilist_id
             if search_result.kitsu_id:
                 kitsu_id = search_result.kitsu_id
-            if ACTIVE_PROVIDER == Provider.TMDB and search_result.series_id:
+            if provider == Provider.TMDB and search_result.series_id:
                 tmdb_id = search_result.series_id
-            elif ACTIVE_PROVIDER == Provider.Kitsu and search_result.series_id:
+            elif provider == Provider.Kitsu and search_result.series_id:
                 kitsu_id = search_result.series_id
         else:
             log.warning(
@@ -368,6 +403,11 @@ def process_torrent(
 
     time.sleep(3)
 
+    # Resolve local episode start mode and absolute numbering options
+    ep_start_mode = series_conf.get("episode_start_mode", EPISODE_START_MODE)
+    abs_numbering = series_conf.get("absolute_numbering", ABSOLUTE_NUMBERING)
+    ep_group_id = series_conf.get("episode_group_id") or os.getenv("EPISODE_GROUP_ID", "").strip() or None
+
     # 7. Rename & organise via the renamer
     cfg = Config.from_env(
         series_name=official_name,
@@ -376,8 +416,10 @@ def process_torrent(
         kitsu_id=kitsu_id,
         media_dir=series_folder,
         organize_into_folders=True,
-        provider=ACTIVE_PROVIDER,
-        episode_group_id=os.getenv("EPISODE_GROUP_ID", "").strip() or None,
+        provider=provider,
+        episode_group_id=ep_group_id,
+        episode_start_mode=ep_start_mode,
+        absolute_numbering=abs_numbering,
     )
 
     log.info("Starting renamer on: %s", series_folder)

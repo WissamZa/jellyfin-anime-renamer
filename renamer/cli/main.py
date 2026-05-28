@@ -49,6 +49,7 @@ def _identity_menu_options() -> list[tuple[str, str]]:
         ("Select series title (TMDB alt titles + AniList)", "select_title"),
         ("Select episode ordering (group / default)", "select_episode_group"),
         ("Set episode numbering mode (per-season / continuing)", "select_episode_mode"),
+        ("Configure global qBittorrent & hook defaults", "config_qbit_hook"),
         ("<-- Back to main menu", "back"),
     ]
 
@@ -109,6 +110,9 @@ def run_identity_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             menus.select_episode_group(cfg, renamer)
         elif action == "select_episode_mode":
             menus.select_episode_start_mode(cfg)
+        elif action == "config_qbit_hook":
+            menus.configure_qbit_hook(cfg)
+
 
 
 def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:

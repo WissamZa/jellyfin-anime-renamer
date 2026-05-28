@@ -15,8 +15,22 @@ from renamer.renamer import AnimeRenamer
 from renamer.picker import Picker
 from renamer.providers.base import EpisodeGroupInfo
 from renamer.romaniser import get_romaniser
+from renamer.cache import SeriesCache
 
 log = get_logger()
+
+
+def _save_cache(cfg: Config) -> None:
+    """Save the updated configuration to the folder's series cache immediately."""
+    SeriesCache(cfg.media_dir).save(
+        series_name=cfg.series_name,
+        provider=cfg.provider,
+        tmdb_series_id=cfg.tmdb_series_id,
+        anilist_id=cfg.anilist_id,
+        kitsu_id=cfg.kitsu_id,
+        episode_group_id=cfg.episode_group_id,
+        episode_start_mode=cfg.episode_start_mode,
+    )
 
 
 def show_config(cfg: Config) -> None:
@@ -62,6 +76,7 @@ def switch_provider(cfg: Config) -> None:
     if result:
         cfg.provider = Provider.from_str(result[1])
         print(f"  Switched to: {cfg.provider.value}")
+        _save_cache(cfg)
 
 
 def set_manual_info(cfg: Config) -> None:
@@ -107,6 +122,7 @@ def set_manual_info(cfg: Config) -> None:
     elif new_eg:
         cfg.episode_group_id = new_eg
         print(f"  Episode Group set to: {cfg.episode_group_id}")
+    _save_cache(cfg)
 
 
 def select_episode_group(cfg: Config, renamer: AnimeRenamer) -> None:
@@ -159,6 +175,7 @@ def select_episode_group(cfg: Config, renamer: AnimeRenamer) -> None:
             cfg.episode_group_id = None
             cfg.absolute_numbering = False
             print("  Using default TMDB ordering.")
+            _save_cache(cfg)
         return
 
     for g in groups:
@@ -190,6 +207,7 @@ def select_episode_group(cfg: Config, renamer: AnimeRenamer) -> None:
         cfg.episode_group_id = None
         cfg.absolute_numbering = False
         print("  Switched to default TMDB ordering.")
+        _save_cache(cfg)
         return
 
     cfg.episode_group_id = selected.id
@@ -207,6 +225,7 @@ def select_episode_group(cfg: Config, renamer: AnimeRenamer) -> None:
             f"\n  Selected: {selected.name} ({selected.type_label})\n"
             f"  Episode Group ID: {selected.id}"
         )
+    _save_cache(cfg)
 
 
 def auto_prompt_episode_groups(cfg: Config, renamer: AnimeRenamer) -> None:
@@ -266,6 +285,7 @@ def auto_prompt_episode_groups(cfg: Config, renamer: AnimeRenamer) -> None:
         cfg.episode_group_id = None
         cfg.absolute_numbering = False
         print("  Using default TMDB ordering.")
+        _save_cache(cfg)
         return
 
     cfg.episode_group_id = selected.id
@@ -276,6 +296,7 @@ def auto_prompt_episode_groups(cfg: Config, renamer: AnimeRenamer) -> None:
         )
     else:
         print(f"  Using: {selected.name}")
+    _save_cache(cfg)
 
 
 def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
@@ -408,6 +429,7 @@ def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
 
     cfg.series_name = selected_title
     print(f"  Title set to: {selected_title}")
+    _save_cache(cfg)
 
 
 def select_episode_start_mode(cfg: Config) -> None:
@@ -448,6 +470,7 @@ def select_episode_start_mode(cfg: Config) -> None:
         return
 
     cfg.episode_start_mode = selected
+    _save_cache(cfg)
     if selected == START_MODE_CONTINUING:
         print(
             "  Switched to continuing mode.\n"
@@ -459,3 +482,285 @@ def select_episode_start_mode(cfg: Config) -> None:
             "  Switched to per-season mode.\n"
             "  Each season starts at E01."
         )
+
+
+def _set_env_value(key: str, value: str) -> None:
+    """Updates or appends a key=value in the root .env file while preserving other lines."""
+    from pathlib import Path
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    lines = []
+    found = False
+    
+    if env_path.exists():
+        try:
+            raw_content = env_path.read_text(encoding="utf-8")
+            lines = raw_content.splitlines()
+        except OSError:
+            pass
+
+    for i, line in enumerate(lines):
+        # Match lines starting with KEY= (ignoring leading whitespace/comments)
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+
+    if not found:
+        # Append to the end of the file
+        lines.append(f"{key}={value}")
+
+    try:
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        log.warning("Could not write to .env file: %s", exc)
+
+
+def configure_qbit_hook(cfg: Config) -> None:
+    """Submenu to configure global qBittorrent & hook defaults (saved to .env)."""
+    import os
+    from pathlib import Path
+
+    while True:
+        # Read directly from environment/env files or fallback to Config
+        qbit_url = os.getenv("QBIT_URL", "http://localhost:8080")
+        qbit_user = os.getenv("QBIT_USERNAME", "")
+        qbit_pass = os.getenv("QBIT_PASSWORD", "")
+        base_path = os.getenv("BASE_DOWNLOAD_PATH", "/mnt/D/Torrent")
+
+        options = [
+            (f"qBittorrent URL      : {qbit_url}", "url"),
+            (f"qBittorrent Username : {qbit_user or '(none)'}", "username"),
+            (f"qBittorrent Password : {'*' * len(qbit_pass) if qbit_pass else '(none)'}", "password"),
+            (f"Base Download Path   : {base_path}", "base_path"),
+            ("Configure Hook Renamer Options (Seasons, Names, Ordering) -->", "renamer_options"),
+            ("<-- Back to settings menu", "back"),
+        ]
+
+        result = Picker(
+            options,
+            title="QBITTORRENT & HOOK CONNECTION DEFAULTS (GLOBAL)",
+            default_index=0,
+        ).run()
+
+        if result is None or result[1] == "back":
+            break
+
+        action = result[1]
+        if action == "url":
+            val = input(f"New qBittorrent URL [{qbit_url}]: ").strip()
+            if val:
+                _set_env_value("QBIT_URL", val)
+                os.environ["QBIT_URL"] = val
+                print(f"  Saved QBIT_URL={val}")
+        elif action == "username":
+            val = input(f"New Username [{qbit_user}]: ").strip()
+            if val:
+                _set_env_value("QBIT_USERNAME", val)
+                os.environ["QBIT_USERNAME"] = val
+                print(f"  Saved QBIT_USERNAME={val}")
+        elif action == "password":
+            val = input("New Password: ").strip()
+            if val:
+                _set_env_value("QBIT_PASSWORD", val)
+                os.environ["QBIT_PASSWORD"] = val
+                print("  Saved QBIT_PASSWORD")
+        elif action == "base_path":
+            val = input(f"New Base Download Path [{base_path}]: ").strip()
+            if val:
+                _set_env_value("BASE_DOWNLOAD_PATH", val)
+                os.environ["BASE_DOWNLOAD_PATH"] = val
+                print(f"  Saved BASE_DOWNLOAD_PATH={val}")
+        elif action == "renamer_options":
+            configure_hook_defaults(cfg)
+
+
+def configure_hook_defaults(cfg: Config) -> None:
+    """Submenu to configure renamer options (seasons, absolute numbering, name overrides) saved in qbit_hook.json."""
+    import json
+    from pathlib import Path
+    
+    conf_path = Path(__file__).resolve().parent.parent.parent / "qbit_hook.json"
+    
+    # Load configuration
+    conf = {}
+    if conf_path.exists():
+        try:
+            conf = json.loads(conf_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+            
+    if "global" not in conf:
+        conf["global"] = {}
+    if "series" not in conf:
+        conf["series"] = {}
+
+    def save_conf():
+        try:
+            conf_path.write_text(json.dumps(conf, indent=2, ensure_ascii=False), encoding="utf-8")
+            print("  Hook configuration saved to qbit_hook.json.")
+        except OSError as exc:
+            print(f"  Could not save configuration: {exc}")
+
+    while True:
+        glob = conf["global"]
+        provider = glob.get("provider", "tmdb")
+        start_mode = glob.get("episode_start_mode", "per_season")
+        abs_num = glob.get("absolute_numbering", False)
+        
+        options = [
+            (f"Global Provider           : {provider}", "provider"),
+            (f"Global Episode Start Mode : {start_mode}", "start_mode"),
+            (f"Global Absolute Numbering : {abs_num}", "abs_num"),
+            (f"Configure Series Overrides (Custom Groups, Names, etc.) -->", "series_overrides"),
+            ("<-- Back", "back"),
+        ]
+        
+        result = Picker(
+            options,
+            title="HOOK RENAMER OPTIONS (SAVES TO QBIT_HOOK.JSON)",
+            default_index=0,
+        ).run()
+        
+        if result is None or result[1] == "back":
+            break
+            
+        action = result[1]
+        if action == "provider":
+            p_res = Picker(
+                [("TMDB", "tmdb"), ("AniList", "anilist"), ("Kitsu", "kitsu")],
+                title="Select Hook Default Provider",
+                default_index=["tmdb", "anilist", "kitsu"].index(provider),
+            ).run()
+            if p_res:
+                glob["provider"] = p_res[1]
+                save_conf()
+        elif action == "start_mode":
+            m_res = Picker(
+                [("Per-Season (E01 each season)", "per_season"), ("Continuing (cumulative episode numbers)", "continuing")],
+                title="Select Hook Default Start Mode",
+                default_index=0 if start_mode == "per_season" else 1,
+            ).run()
+            if m_res:
+                glob["episode_start_mode"] = m_res[1]
+                save_conf()
+        elif action == "abs_num":
+            a_res = Picker(
+                [("Disabled", False), ("Enabled", True)],
+                title="Select Hook Default Absolute Numbering Mode",
+                default_index=1 if abs_num else 0,
+            ).run()
+            if a_res:
+                glob["absolute_numbering"] = a_res[1]
+                save_conf()
+        elif action == "series_overrides":
+            configure_hook_series_overrides(conf, save_conf)
+
+
+def configure_hook_series_overrides(conf: dict, save_cb) -> None:
+    """Manage series overrides (custom names, episode groups, etc.) in the JSON configuration."""
+    while True:
+        series_overrides = conf["series"]
+        options = []
+        for s_name, item in series_overrides.items():
+            label = f"{s_name} -> {item.get('series_name') or s_name}"
+            options.append((label, s_name))
+            
+        options.append(("[Add New Series Override]", "add_new"))
+        options.append(("<-- Back", "back"))
+        
+        result = Picker(
+            options,
+            title="SERIES OVERRIDES (SAVES TO QBIT_HOOK.JSON)",
+            default_index=0,
+        ).run()
+        
+        if result is None or result[1] == "back":
+            break
+            
+        action = result[1]
+        if action == "add_new":
+            s_name = input("Enter Torrent Series Title (exact name extracted from title): ").strip()
+            if s_name:
+                if s_name not in series_overrides:
+                    series_overrides[s_name] = {}
+                configure_single_series_override(s_name, series_overrides[s_name], save_cb)
+                if not series_overrides[s_name]:
+                    series_overrides.pop(s_name, None)
+                save_cb()
+        else:
+            configure_single_series_override(action, series_overrides[action], save_cb)
+            if not series_overrides[action]:
+                series_overrides.pop(action, None)
+            save_cb()
+
+
+def configure_single_series_override(torrent_name: str, item: dict, save_cb) -> None:
+    """Configure overrides for a single series (saved in qbit_hook.json)."""
+    while True:
+        official_name = item.get("series_name") or "(none)"
+        ep_group = item.get("episode_group_id") or "(none)"
+        start_mode = item.get("episode_start_mode") or "Default"
+        abs_num = item.get("absolute_numbering")
+        abs_num_str = str(abs_num) if abs_num is not None else "Default"
+        
+        options = [
+            (f"Official / Cleaned Series Name : {official_name}", "name"),
+            (f"Episode Group ID              : {ep_group}", "group_id"),
+            (f"Episode Start Mode            : {start_mode}", "start_mode"),
+            (f"Absolute Numbering            : {abs_num_str}", "abs_num"),
+            ("[Delete this Override]", "delete"),
+            ("<-- Back", "back"),
+        ]
+        
+        result = Picker(
+            options,
+            title=f"OVERRIDES FOR: {torrent_name}",
+            default_index=0,
+        ).run()
+        
+        if result is None or result[1] == "back":
+            break
+            
+        action = result[1]
+        if action == "name":
+            val = input(f"New Official Name [{official_name}]: ").strip()
+            if val:
+                item["series_name"] = val
+                save_cb()
+        elif action == "group_id":
+            val = input(f"New Episode Group ID [{ep_group}]: ").strip()
+            if val:
+                item["episode_group_id"] = val
+                save_cb()
+        elif action == "start_mode":
+            m_res = Picker(
+                [("Default", None), ("Per-Season", "per_season"), ("Continuing", "continuing")],
+                title="Select Episode Start Mode Override",
+                default_index=0,
+            ).run()
+            if m_res:
+                if m_res[1] is None:
+                    item.pop("episode_start_mode", None)
+                else:
+                    item["episode_start_mode"] = m_res[1]
+                save_cb()
+        elif action == "abs_num":
+            a_res = Picker(
+                [("Default", None), ("Disabled", False), ("Enabled", True)],
+                title="Select Absolute Numbering Override",
+                default_index=0,
+            ).run()
+            if a_res:
+                if a_res[1] is None:
+                    item.pop("absolute_numbering", None)
+                else:
+                    item["absolute_numbering"] = a_res[1]
+                save_cb()
+        elif action == "delete":
+            print(f"  Are you sure you want to delete override for {torrent_name}?")
+            if input("  Continue? (y/N): ").strip().lower() == "y":
+                # Clear the reference and tell the callback to remove empty dictionary from conf["series"]
+                item.clear()
+                break
+
+
