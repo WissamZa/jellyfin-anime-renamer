@@ -56,7 +56,7 @@ class SpecialParser:
             named = data.get("named_specials", [])
             if isinstance(named, list):
                 return [
-                    str(s).strip()
+                    s.strip()
                     for s in named
                     if isinstance(s, str) and s.strip()
                 ]
@@ -115,7 +115,7 @@ class EpisodeNumberParser:
         re.compile(r"[Ss](\d{1,2})\s*[Ee][Pp]?\s*(\d{1,4})", re.IGNORECASE),
         # Sxx - xx or Season xx - xx or Sxx_xx
         re.compile(
-            r"\b(?:Season|S)(\d{1,2})\s*[-–_]\s*(\d{1,4})\b",
+            r"\b(?:Season|S)\s*(\d{1,2})\s*[-–_]\s*(\d{1,4})\b",
             re.IGNORECASE,
         ),
         # xxExx or xx_xx like 2x08

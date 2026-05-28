@@ -111,6 +111,99 @@ class TMDBFetcher(EpisodeFetcher):
         self._has_specials = True
         self._group_specials: dict[int, EpisodeInfo] = {}
 
+    # ── Alternative Titles ─────────────────────────────────
+    def fetch_alternative_titles(self) -> list[dict]:
+        """
+        Fetch alternative titles for the series from TMDB.
+
+        Returns a list of dicts with keys: title, type, iso_3166_1.
+        The TMDB API returns titles in two groups:
+          - results[]  : titles with a type (3=original, 4=primary, etc.)
+          - translations[] : titles from the /translations endpoint
+
+        We merge both and deduplicate.
+        """
+        all_titles: list[dict] = []
+        seen: set[str] = set()
+
+        # 1. Fetch /tv/{id}/alternative_titles
+        data = self._get(
+            f"{self.BASE}/tv/{self._series_id}/alternative_titles",
+            self._params,
+            cfg=self._cfg,
+        )
+        if data:
+            for t in data.get("results", []):
+                title = (t.get("title") or "").strip()
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                all_titles.append({
+                    "title": title,
+                    "type": t.get("type", ""),
+                    "iso_3166_1": t.get("iso_3166_1", ""),
+                })
+
+        # 2. Fetch /tv/{id}/translations for more title variants
+        trans_data = self._get(
+            f"{self.BASE}/tv/{self._series_id}/translations",
+            self._params,
+            cfg=self._cfg,
+        )
+        if trans_data:
+            for t in trans_data.get("translations", []):
+                # Each translation has data.name (title in that language)
+                td = t.get("data", {})
+                title = (td.get("name") or "").strip()
+                if not title or title in seen:
+                    continue
+                seen.add(title)
+                iso = t.get("iso_639_1", "") + "-" + t.get("iso_3166_1", "")
+                all_titles.append({
+                    "title": title,
+                    "type": "translation",
+                    "iso_3166_1": iso,
+                })
+
+        # 3. Fetch the main series info for original_name and name
+        show = self._get(
+            f"{self.BASE}/tv/{self._series_id}",
+            self._params,
+            cfg=self._cfg,
+        )
+        if show:
+            for field in ("name", "original_name"):
+                title = (show.get(field) or "").strip()
+                if title and title not in seen:
+                    seen.add(title)
+                    all_titles.append({
+                        "title": title,
+                        "type": "primary" if field == "name" else "original",
+                        "iso_3166_1": show.get("origin_country", [""])[0] if field == "original_name" else "",
+                    })
+
+            # Also add the Japanese name
+            ja_data = self._get(
+                f"{self.BASE}/tv/{self._series_id}",
+                {**self._params, "language": "ja"},
+                cfg=self._cfg,
+            )
+            if ja_data:
+                ja_name = (ja_data.get("name") or "").strip()
+                if ja_name and ja_name not in seen:
+                    seen.add(ja_name)
+                    all_titles.append({
+                        "title": ja_name,
+                        "type": "japanese",
+                        "iso_3166_1": "JP",
+                    })
+
+        log.info(
+            "TMDB: found %d alternative title(s) for id=%d",
+            len(all_titles), self._series_id,
+        )
+        return all_titles
+
     # ── Episode Groups ──────────────────────────────────────
     def fetch_episode_groups(self) -> list[EpisodeGroupInfo]:
         """
@@ -313,7 +406,7 @@ class TMDBFetcher(EpisodeFetcher):
                         result[(sn, en)] = name
             return result
 
-        with ThreadPoolExecutor(max_workers=self._cfg.MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=self._cfg.max_workers) as pool:
             futures = {
                 pool.submit(fetch_ja_season, sn): sn
                 for sn in orig_seasons
@@ -333,8 +426,8 @@ class TMDBFetcher(EpisodeFetcher):
         use that instead of the default season structure.
         """
         # If an episode group is set, use it
-        if self._cfg and self._cfg.EPISODE_GROUP_ID:
-            group_id = self._cfg.EPISODE_GROUP_ID
+        if self._cfg and self._cfg.episode_group_id:
+            group_id = self._cfg.episode_group_id
             log.info(
                 "Using episode group '%s' for TMDB id=%d",
                 group_id, self._series_id,
@@ -395,7 +488,7 @@ class TMDBFetcher(EpisodeFetcher):
                 merged.append(ep)
             return sn, sorted(merged, key=lambda x: x["episode_number"])
 
-        with ThreadPoolExecutor(max_workers=self._cfg.MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=self._cfg.max_workers) as pool:
             futures = {pool.submit(fetch_season, s): s for s in seasons}
             for future in as_completed(futures):
                 sn, eps = future.result()

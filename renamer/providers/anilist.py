@@ -54,9 +54,9 @@ class AniListFetcher(EpisodeFetcher):
     def _gql(self, query: str, variables: dict) -> Optional[dict]:
         # AniList uses POST, so cache by query + variables
         cache_key = ("anilist_gql", query, frozenset(variables.items()))
-        if cache_key in self._api_cache:
+        if cache_key in self._cache:
             log.debug("AniList cache hit for variables: %s", variables)
-            return self._api_cache[cache_key]
+            return self._cache[cache_key]
 
         try:
             r = requests.post(
@@ -66,12 +66,12 @@ class AniListFetcher(EpisodeFetcher):
             )
             if r.status_code == 200:
                 result = r.json().get("data", {}).get("Media")
-                self._api_cache[cache_key] = result
+                self._cache[cache_key] = result
                 return result
             log.warning("AniList HTTP %s", r.status_code)
         except requests.exceptions.RequestException as e:
             log.error("AniList request failed: %s", e)
-        self._api_cache[cache_key] = None
+        self._cache[cache_key] = None
         return None
 
     def find_id(self, name: str) -> Optional[int]:

@@ -1,77 +1,85 @@
 """
-providers.registry — ProviderRegistry (plugin system).
+renamer.providers.registry
+==========================
+Plugin registry that maps Provider enums to fetcher factories.
+
+Design notes
+------------
+* Factories are plain callables ``(Config) -> EpisodeFetcher``, so providers
+  can be registered by third-party code without subclassing anything here.
+* ``create_fetcher`` raises a ``LookupError`` instead of returning ``None``
+  — callers that want a soft failure should catch it.
+* The global singleton is populated lazily on first access.
 """
 
-from typing import Optional, Type
+from __future__ import annotations
+
+from typing import Callable, Optional
 
 from renamer.config import Config, Provider, get_logger
 from renamer.providers.base import EpisodeFetcher, SeriesSearchResult
 
 log = get_logger()
 
+# Type alias for a factory callable
+FetcherFactory = Callable[[Config], EpisodeFetcher]
+SearchFactory = Callable[[str, Config], Optional[SeriesSearchResult]]
+
 
 class ProviderRegistry:
     """
-    Plugin registry for metadata providers.
+    Registry that maps a ``Provider`` enum to a fetcher factory and an
+    optional search factory.
 
-    Usage:
+    Usage::
+
         registry = ProviderRegistry()
-        registry.register(Provider.TMDB, TMDBFetcher, TMDBSearch)
+        registry.register(Provider.TMDB, tmdb_factory, tmdb_search)
         fetcher = registry.create_fetcher(Provider.TMDB, cfg)
-        result  = registry.search(Provider.TMDB, name, cfg)
     """
 
     def __init__(self) -> None:
-        self._fetchers: dict[Provider, Type[EpisodeFetcher]] = {}
-        self._search_classes: dict[Provider, type] = {}
+        self._fetchers: dict[Provider, FetcherFactory] = {}
+        self._searchers: dict[Provider, SearchFactory] = {}
+
+    # ── Registration ─────────────────────────────────────────
 
     def register(
         self,
         provider: Provider,
-        fetcher_cls: Type[EpisodeFetcher],
-        search_cls: Optional[type] = None,
+        fetcher_factory: FetcherFactory,
+        search_factory: Optional[SearchFactory] = None,
     ) -> None:
-        """Register a fetcher (and optional search class) for a provider."""
-        self._fetchers[provider] = fetcher_cls
-        if search_cls is not None:
-            self._search_classes[provider] = search_cls
+        """Register a fetcher factory (and optional search factory)."""
+        self._fetchers[provider] = fetcher_factory
+        if search_factory is not None:
+            self._searchers[provider] = search_factory
         log.debug("Registered provider: %s", provider.value)
 
-    def create_fetcher(
-        self,
-        provider: Provider,
-        cfg: Config,
-    ) -> Optional[EpisodeFetcher]:
+    # ── Fetcher creation ─────────────────────────────────────
+
+    def create_fetcher(self, provider: Provider, cfg: Config) -> EpisodeFetcher:
         """
-        Create and return a fetcher instance for the given provider,
-        configured from *cfg*.
+        Return a configured fetcher for *provider*.
+
+        Raises
+        ------
+        LookupError
+            If no factory is registered for *provider*.
+        ValueError
+            If the provider's required config fields are missing.
         """
-        cls = self._fetchers.get(provider)
-        if cls is None:
-            log.error("No fetcher registered for provider: %s", provider.value)
-            return None
+        if provider is None:
+            raise LookupError(
+                "provider is None — check your .env PROVIDER setting or series cache. "
+                "Expected one of: tmdb, anilist, kitsu."
+            )
+        factory = self._fetchers.get(provider)
+        if factory is None:
+            raise LookupError(f"No fetcher registered for provider: {provider.value}")
+        return factory(cfg)
 
-        if provider == Provider.TMDB:
-            from renamer.providers.tmdb import TMDBFetcher
-            if not cfg.TMDB_SERIES_ID:
-                log.error("TMDB_SERIES_ID is required for TMDB provider.")
-                return None
-            return TMDBFetcher(cfg.TMDB_API_KEY, cfg.TMDB_SERIES_ID, cfg)
-
-        if provider == Provider.AniList:
-            from renamer.providers.anilist import AniListFetcher
-            return AniListFetcher(cfg.ANILIST_ID)
-
-        if provider == Provider.Kitsu:
-            from renamer.providers.kitsu import KitsuFetcher
-            return KitsuFetcher(cfg.KITSU_ID, cfg)
-
-        # Fallback — try no-arg constructor
-        try:
-            return cls()
-        except Exception as exc:
-            log.error("Cannot construct fetcher for %s: %s", provider.value, exc)
-            return None
+    # ── Series search ─────────────────────────────────────────
 
     def search(
         self,
@@ -79,62 +87,85 @@ class ProviderRegistry:
         name: str,
         cfg: Config,
     ) -> Optional[SeriesSearchResult]:
-        """Search for a series by name using the provider's search class."""
-        search_cls = self._search_classes.get(provider)
-        if search_cls is None:
-            log.warning("No search class registered for provider: %s", provider.value)
+        """Search for a series by name using the provider's search factory."""
+        factory = self._searchers.get(provider)
+        if factory is None:
+            log.warning("No search factory registered for provider: %s", provider.value)
             return None
-
-        if provider == Provider.TMDB:
-            from renamer.providers.tmdb import TMDBSearch
-            searcher = TMDBSearch(cfg.TMDB_API_KEY)
-            result = searcher.find(name)
-            if result:
-                tmdb_id, romaji = result
-                return SeriesSearchResult(
-                    provider=provider.value,
-                    series_id=tmdb_id,
-                    series_name=romaji,
-                    tmdb_id=tmdb_id,
-                )
-
-        if provider == Provider.Kitsu:
-            from renamer.providers.kitsu import KitsuFetcher
-            fetcher = KitsuFetcher(None, cfg)
-            result = fetcher.find_series(name)
-            if result:
-                kitsu_id, romaji = result
-                return SeriesSearchResult(
-                    provider=provider.value,
-                    series_id=kitsu_id,
-                    series_name=romaji,
-                    kitsu_id=kitsu_id,
-                )
-
-        return None
+        return factory(name, cfg)
 
     def registered_providers(self) -> list[Provider]:
-        """Return list of registered provider enums."""
         return list(self._fetchers.keys())
 
 
-# ── Global registry ──────────────────────────────────────
-_global_registry = ProviderRegistry()
+# ---------------------------------------------------------------------------
+# Default fetcher / search factories
+# ---------------------------------------------------------------------------
+
+
+def _tmdb_factory(cfg: Config) -> EpisodeFetcher:
+    from renamer.providers.tmdb import TMDBFetcher
+
+    if not cfg.tmdb_series_id:
+        raise ValueError("TMDB_SERIES_ID is required for the TMDB provider.")
+    return TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
+
+
+def _tmdb_search(name: str, cfg: Config) -> Optional[SeriesSearchResult]:
+    from renamer.providers.tmdb import TMDBSearch
+
+    result = TMDBSearch(cfg.tmdb_api_key).find(name)
+    if result:
+        tmdb_id, romaji = result
+        return SeriesSearchResult(
+            provider=Provider.TMDB.value,
+            series_id=tmdb_id,
+            series_name=romaji,
+            tmdb_id=tmdb_id,
+        )
+    return None
+
+
+def _anilist_factory(cfg: Config) -> EpisodeFetcher:
+    from renamer.providers.anilist import AniListFetcher
+
+    return AniListFetcher(cfg.anilist_id)
+
+
+def _kitsu_factory(cfg: Config) -> EpisodeFetcher:
+    from renamer.providers.kitsu import KitsuFetcher
+
+    return KitsuFetcher(cfg.kitsu_id, cfg)
+
+
+def _kitsu_search(name: str, cfg: Config) -> Optional[SeriesSearchResult]:
+    from renamer.providers.kitsu import KitsuFetcher
+
+    result = KitsuFetcher(None, cfg).find_series(name)
+    if result:
+        kitsu_id, romaji = result
+        return SeriesSearchResult(
+            provider=Provider.Kitsu.value,
+            series_id=kitsu_id,
+            series_name=romaji,
+            kitsu_id=kitsu_id,
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Global singleton
+# ---------------------------------------------------------------------------
+
+_global_registry: Optional[ProviderRegistry] = None
 
 
 def get_registry() -> ProviderRegistry:
-    """Return the global ProviderRegistry (auto-populated on first import)."""
-    if not _global_registry.registered_providers():
-        _auto_register()
+    """Return the global registry, populating it on first call."""
+    global _global_registry
+    if _global_registry is None:
+        _global_registry = ProviderRegistry()
+        _global_registry.register(Provider.TMDB, _tmdb_factory, _tmdb_search)
+        _global_registry.register(Provider.AniList, _anilist_factory)
+        _global_registry.register(Provider.Kitsu, _kitsu_factory, _kitsu_search)
     return _global_registry
-
-
-def _auto_register() -> None:
-    """Register all built-in providers."""
-    from renamer.providers.tmdb import TMDBFetcher, TMDBSearch
-    from renamer.providers.anilist import AniListFetcher
-    from renamer.providers.kitsu import KitsuFetcher
-
-    _global_registry.register(Provider.TMDB, TMDBFetcher, TMDBSearch)
-    _global_registry.register(Provider.AniList, AniListFetcher)
-    _global_registry.register(Provider.Kitsu, KitsuFetcher)

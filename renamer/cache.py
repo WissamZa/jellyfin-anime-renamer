@@ -47,17 +47,19 @@ class SeriesCache:
         anilist_id: Optional[int] = None,
         kitsu_id: Optional[int] = None,
         episode_group_id: Optional[str] = None,
+        episode_start_mode: Optional[str] = None,
     ) -> None:
         """
         Save resolved series info to the cache file.
         """
         data: dict[str, Any] = {
-            "series_name":      series_name,
-            "provider":         provider.value,
-            "tmdb_series_id":   tmdb_series_id,
-            "anilist_id":       anilist_id,
-            "kitsu_id":         kitsu_id,
-            "episode_group_id": episode_group_id,
+            "series_name":        series_name,
+            "provider":           provider.value,
+            "tmdb_series_id":     tmdb_series_id,
+            "anilist_id":         anilist_id,
+            "kitsu_id":           kitsu_id,
+            "episode_group_id":   episode_group_id,
+            "episode_start_mode": episode_start_mode,
         }
         try:
             self._path.write_text(

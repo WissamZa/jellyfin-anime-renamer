@@ -192,10 +192,10 @@ class Picker:
             key = _read_key_raw(fd)
 
             if key in ("UP", "k"):
-                self.index = max(0, self.index - 1)
+                self.index = (self.index - 1) % len(self.options)
                 self._num_buf = ""
             elif key in ("DOWN", "j"):
-                self.index = min(len(self.options) - 1, self.index + 1)
+                self.index = (self.index + 1) % len(self.options)
                 self._num_buf = ""
             elif key == "ENTER":
                 if self._num_buf:
@@ -272,8 +272,31 @@ class Picker:
             sys.stdout.write("\n")
             lines += 1
 
-        for i in range(len(self.options)):
+        n_total = len(self.options)
+        viewport_size = 15
+
+        if n_total <= viewport_size:
+            start_idx = 0
+            end_idx = n_total
+        else:
+            start_idx = max(0, self.index - viewport_size // 2)
+            end_idx = start_idx + viewport_size
+            if end_idx > n_total:
+                end_idx = n_total
+                start_idx = end_idx - viewport_size
+
+        # Up indicator
+        if start_idx > 0:
+            sys.stdout.write(f"    {_DIM}▲ (+ {start_idx} more above){_RESET}\n")
+            lines += 1
+
+        for i in range(start_idx, end_idx):
             sys.stdout.write(self._format_line(i, max_width) + "\n")
+            lines += 1
+
+        # Down indicator
+        if end_idx < n_total:
+            sys.stdout.write(f"    {_DIM}▼ (+ {n_total - end_idx} more below){_RESET}\n")
             lines += 1
 
         sys.stdout.write("\n")
@@ -342,3 +365,258 @@ def pick(
             idx, value = choice   # (0, "dry") or (1, "live")
     """
     return Picker(options, title=title, default_index=default_index).run()
+
+
+# ── Multi-select Picker ───────────────────────────────────────
+
+_GREEN = "\033[32m"
+_YELLOW = "\033[1;33m"
+
+
+class MultiPicker:
+    """
+    Interactive terminal multi-select picker.
+
+    Controls
+    --------
+    ↑/↓ or j/k  — navigate
+    Space        — toggle selection on current row
+    a            — toggle all (select all / deselect all)
+    Enter        — confirm and return selected items
+    q / Esc      — cancel (returns None)
+
+    Returns a list of ``(index, value)`` tuples for all checked items,
+    or ``None`` if cancelled.  Returns ``[]`` if confirmed with nothing selected.
+    """
+
+    def __init__(
+        self,
+        options: List[Tuple[str, Any]],
+        title: str = "",
+        indicator: str = ">",
+        preselected: Optional[List[int]] = None,
+    ):
+        if not options:
+            raise ValueError("MultiPicker requires at least one option.")
+        self.options = options
+        self.title = title
+        self.indicator = indicator
+        self.index = 0
+        self._selected: set[int] = set(preselected or [])
+        self._help = (
+            "↑↓/jk navigate · Space toggle · a all · Enter confirm · q cancel"
+        )
+        self._lines_drawn: int = 0
+
+    # ── public API ────────────────────────────────────────────
+
+    def run(self) -> Optional[List[Tuple[int, Any]]]:
+        """
+        Show the multi-picker and block until the user confirms or cancels.
+
+        Returns a list of ``(index, value)`` pairs, or ``None`` if cancelled.
+        """
+        if not _is_tty():
+            return self._fallback()
+
+        try:
+            import termios
+            import tty
+        except ImportError:
+            return self._fallback()
+
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            return self._run_tty(fd, old)
+        except Exception:
+            return self._fallback()
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                pass
+            sys.stdout.write(_SHOW_CURSOR)
+            sys.stdout.flush()
+
+    # ── interactive TTY path ──────────────────────────────────
+
+    def _run_tty(self, fd: int, old_settings) -> Optional[List[Tuple[int, Any]]]:
+        import termios
+        import tty
+
+        tty.setcbreak(fd)
+        sys.stdout.write(_HIDE_CURSOR)
+        self._draw()
+        sys.stdout.flush()
+
+        while True:
+            key = _read_key_raw(fd)
+
+            if key in ("UP", "k"):
+                self.index = (self.index - 1) % len(self.options)
+            elif key in ("DOWN", "j"):
+                self.index = (self.index + 1) % len(self.options)
+            elif key == " ":
+                # Toggle selection
+                if self.index in self._selected:
+                    self._selected.discard(self.index)
+                else:
+                    self._selected.add(self.index)
+            elif key in ("a", "A"):
+                # Toggle all
+                if len(self._selected) == len(self.options):
+                    self._selected.clear()
+                else:
+                    self._selected = set(range(len(self.options)))
+            elif key == "ENTER":
+                self._clear()
+                sys.stdout.write(_SHOW_CURSOR)
+                sys.stdout.flush()
+                return [(i, self.options[i][1]) for i in sorted(self._selected)]
+            elif key in ("q", "ESC"):
+                self._clear()
+                sys.stdout.write(_SHOW_CURSOR)
+                sys.stdout.flush()
+                return None
+
+            self._clear()
+            self._draw()
+
+    # ── fallback ─────────────────────────────────────────────
+
+    def _fallback(self) -> Optional[List[Tuple[int, Any]]]:
+        """Simple input()-based multi-selection for non-TTY environments."""
+        self._print_static()
+        print(
+            "  Enter comma-separated numbers, 'a' for all, or 'q' to cancel:"
+        )
+        try:
+            raw = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        if raw.lower() == "q":
+            return None
+        if raw.lower() == "a":
+            return [(i, self.options[i][1]) for i in range(len(self.options))]
+
+        selected: list[tuple[int, Any]] = []
+        for token in raw.split(","):
+            token = token.strip()
+            try:
+                idx = int(token) - 1
+                if 0 <= idx < len(self.options):
+                    selected.append((idx, self.options[idx][1]))
+            except ValueError:
+                pass
+        return selected
+
+    # ── drawing ──────────────────────────────────────────────
+
+    def _format_line(self, i: int, max_width: int) -> str:
+        label = self.options[i][0]
+        checked = i in self._selected
+        check_mark = f"{_GREEN}✓{_RESET}" if checked else " "
+
+        if i == self.index:
+            line = (
+                f"  {self.indicator} [{check_mark}] {i + 1}. "
+                f"{_BOLD_CYAN}{label}{_RESET}"
+            )
+        else:
+            line = f"    [{check_mark}] {i + 1}. {label}"
+
+        return _truncate_to_width(line, max_width)
+
+    def _draw(self) -> None:
+        max_width = _terminal_width()
+        lines = 0
+        n_selected = len(self._selected)
+        n_total = len(self.options)
+
+        if self.title:
+            sys.stdout.write(f"  {self.title}\n")
+            lines += 1
+        sys.stdout.write(
+            f"  {_DIM}Selected: {_RESET}"
+            f"{_YELLOW}{n_selected}{_RESET}{_DIM}/{n_total}{_RESET}\n"
+        )
+        lines += 1
+        sys.stdout.write("\n")
+        lines += 1
+
+        viewport_size = 15
+        if n_total <= viewport_size:
+            start_idx = 0
+            end_idx = n_total
+        else:
+            start_idx = max(0, self.index - viewport_size // 2)
+            end_idx = start_idx + viewport_size
+            if end_idx > n_total:
+                end_idx = n_total
+                start_idx = end_idx - viewport_size
+
+        # Up indicator
+        if start_idx > 0:
+            sys.stdout.write(f"    {_DIM}▲ (+ {start_idx} more above){_RESET}\n")
+            lines += 1
+
+        for i in range(start_idx, end_idx):
+            sys.stdout.write(self._format_line(i, max_width) + "\n")
+            lines += 1
+
+        # Down indicator
+        if end_idx < n_total:
+            sys.stdout.write(f"    {_DIM}▼ (+ {n_total - end_idx} more below){_RESET}\n")
+            lines += 1
+
+        sys.stdout.write("\n")
+        lines += 1
+
+        help_line = _truncate_to_width(
+            f"  {_DIM}{self._help}{_RESET}", max_width
+        )
+        sys.stdout.write(help_line + "\n")
+        lines += 1
+
+        sys.stdout.flush()
+        self._lines_drawn = lines
+
+    def _clear(self) -> None:
+        if self._lines_drawn > 0:
+            sys.stdout.write(f"\033[{self._lines_drawn}A")
+            sys.stdout.write("\r")
+            sys.stdout.write(_CLEAR_DOWN)
+            sys.stdout.flush()
+
+    def _print_static(self) -> None:
+        if self.title:
+            print(f"\n  {self.title}\n")
+        for i, (label, _) in enumerate(self.options):
+            mark = "✓" if i in self._selected else " "
+            cursor = self.indicator if i == self.index else " "
+            print(f"  {cursor} [{mark}] {i + 1}. {label}")
+        print()
+
+
+def multi_pick(
+    options: List[Tuple[str, Any]],
+    title: str = "",
+    preselected: Optional[List[int]] = None,
+) -> Optional[List[Tuple[int, Any]]]:
+    """
+    One-shot multi-picker.  Returns a list of ``(index, value)`` or ``None``.
+
+    Example::
+
+        choices = multi_pick(
+            [("Naruto", p1), ("Bleach", p2), ("One Piece", p3)],
+            title="Select Series",
+        )
+        for idx, path in (choices or []):
+            process(path)
+    """
+    return MultiPicker(options, title=title, preselected=preselected).run()
+
