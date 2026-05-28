@@ -16,6 +16,12 @@ from renamer.picker import Picker
 from renamer.providers.base import EpisodeGroupInfo
 from renamer.romaniser import get_romaniser
 from renamer.cache import SeriesCache
+from renamer.icons import (
+    has_folder_icon,
+    remove_folder_icon,
+    set_folder_icon,
+    set_folder_icon_batch,
+)
 
 log = get_logger()
 
@@ -764,3 +770,221 @@ def configure_single_series_override(torrent_name: str, item: dict, save_cb) -> 
                 break
 
 
+# ---------------------------------------------------------------------------
+# Folder Icon Management
+# ---------------------------------------------------------------------------
+
+def set_icon_current_folder(cfg: Config) -> None:
+    """
+    Set a folder icon for the current series folder (cfg.media_dir).
+
+    Downloads the poster from the active provider and creates a
+    ``.directory`` file so Dolphin / Nautilus / Thunar show it.
+    """
+    folder = cfg.media_dir
+    if not folder.is_dir():
+        print(f"\n  Media dir does not exist: {folder}")
+        return
+
+    if has_folder_icon(folder):
+        print(f"\n  This folder already has a custom icon.")
+        overwrite = input("  Overwrite? (y/N): ").strip().lower()
+        if overwrite != "y":
+            print("  Cancelled.")
+            return
+
+    print(f"\n  Fetching poster for: {cfg.series_name}")
+    print(f"  Provider: {cfg.provider.value}")
+
+    if set_folder_icon(folder, cfg):
+        print(f"  Folder icon set successfully!")
+        print(f"  Icon file: {folder}/.folder_icon.png")
+        print(f"  Config:    {folder}/.directory")
+    else:
+        print(f"  No poster found for '{cfg.series_name}'.")
+        print(f"  Make sure the series is identified (TMDB/AniList/Kitsu ID set).")
+
+
+def remove_icon_current_folder(cfg: Config) -> None:
+    """Remove the custom folder icon from the current series folder."""
+    folder = cfg.media_dir
+    if not has_folder_icon(folder):
+        print(f"\n  No custom icon found for: {folder}")
+        return
+
+    if remove_folder_icon(folder):
+        print(f"\n  Folder icon removed from: {folder}")
+    else:
+        print(f"\n  Failed to remove icon from: {folder}")
+
+
+def batch_set_icons(cfg: Config) -> None:
+    """
+    Set folder icons for ALL anime subfolders under cfg.media_dir.
+
+    Scans for immediate subfolders, auto-identifies each series,
+    and downloads posters.  Uses the same identification logic as
+    the multi-series scanner.
+    """
+    from renamer.cli.multi_series import (
+        DiscoveredSeries,
+        LibraryDBCache,
+        auto_identify_series,
+        scan_series_folders,
+    )
+    from renamer.picker import MultiPicker
+
+    media_dir = cfg.media_dir
+    print(f"\n  Scanning for series in: {media_dir}")
+
+    folders = scan_series_folders(media_dir)
+    if not folders:
+        print("  No anime series folders found.")
+        return
+
+    print(f"  Found {len(folders)} folder(s). Auto-identifying titles …\n")
+
+    db_cache = LibraryDBCache(media_dir)
+    discovered: list[DiscoveredSeries] = []
+
+    for i, folder in enumerate(folders, 1):
+        print(f"  [{i}/{len(folders)}] {folder.name} … ", end="", flush=True)
+        try:
+            series = auto_identify_series(folder, cfg, db_cache)
+        except Exception as exc:
+            log.warning("Error identifying '%s': %s", folder.name, exc)
+            series = DiscoveredSeries(
+                folder=folder,
+                folder_name=folder.name,
+                resolved_name=folder.name,
+                provider=cfg.provider,
+            )
+        discovered.append(series)
+
+        # Show status
+        has_icon = has_folder_icon(folder)
+        icon_tag = " [icon OK]" if has_icon else ""
+        id_tag = ""
+        if series.tmdb_id:
+            id_tag = f"  [TMDB:{series.tmdb_id}]"
+        elif series.anilist_id:
+            id_tag = f"  [AL:{series.anilist_id}]"
+        elif series.kitsu_id:
+            id_tag = f"  [Kitsu:{series.kitsu_id}]"
+        else:
+            id_tag = "  [ID unknown]"
+        print(f"-> {series.resolved_name}{id_tag}{icon_tag}")
+
+    print()
+
+    # Filter: only show series that don't already have icons
+    needs_icon = [s for s in discovered if not has_folder_icon(s.folder)]
+    already_has = len(discovered) - len(needs_icon)
+
+    if already_has:
+        print(f"  {already_has} folder(s) already have icons (skipped).")
+
+    if not needs_icon:
+        print("  All folders already have icons!")
+        return
+
+    # Present picker for which series to set icons on
+    options: list[tuple[str, DiscoveredSeries]] = []
+    for s in needs_icon:
+        id_tag = ""
+        if s.tmdb_id:
+            id_tag = f"  TMDB:{s.tmdb_id}"
+        elif s.anilist_id:
+            id_tag = f"  AL:{s.anilist_id}"
+        elif s.kitsu_id:
+            id_tag = f"  Kitsu:{s.kitsu_id}"
+        label = f"{s.resolved_name}{id_tag}  [{s.folder.name}]"
+        options.append((label, s))
+
+    choices = MultiPicker(
+        options,
+        title="SELECT FOLDERS TO SET ICONS",
+        preselected=list(range(len(options))),  # pre-select all
+    ).run()
+
+    if choices is None:
+        print("  Cancelled.")
+        return
+
+    if not choices:
+        print("  No folders selected.")
+        return
+
+    selected = [s for _, s in choices]
+    print(f"\n  Setting icons for {len(selected)} folder(s) …\n")
+
+    success, failure = 0, 0
+    for i, series in enumerate(selected, 1):
+        print(f"  [{i}/{len(selected)}] {series.resolved_name} … ", end="", flush=True)
+        try:
+            series_cfg = _make_series_config_for_icon(series, cfg)
+            if set_folder_icon(series.folder, series_cfg):
+                print("OK")
+                success += 1
+            else:
+                print("no poster found")
+                failure += 1
+        except Exception as exc:
+            print(f"FAILED: {exc}")
+            log.error("Icon setting failed for '%s': %s", series.resolved_name, exc)
+            failure += 1
+
+    print(f"\n  Icons set: {success}  |  Failed: {failure}")
+
+
+def batch_remove_icons(cfg: Config) -> None:
+    """Remove custom folder icons from ALL anime subfolders under cfg.media_dir."""
+    from renamer.cli.multi_series import scan_series_folders
+    from renamer.picker import MultiPicker
+
+    media_dir = cfg.media_dir
+    folders = scan_series_folders(media_dir)
+
+    # Only show folders that have icons
+    with_icons = [f for f in folders if has_folder_icon(f)]
+    if not with_icons:
+        print("\n  No folders with custom icons found.")
+        return
+
+    options: list[tuple[str, Path]] = []
+    for folder in with_icons:
+        options.append((folder.name, folder))
+
+    choices = MultiPicker(
+        options,
+        title="SELECT FOLDERS TO REMOVE ICONS",
+        preselected=list(range(len(options))),
+    ).run()
+
+    if choices is None:
+        print("  Cancelled.")
+        return
+
+    selected = [f for _, f in choices]
+    print(f"\n  Removing icons from {len(selected)} folder(s) …\n")
+
+    for i, folder in enumerate(selected, 1):
+        print(f"  [{i}/{len(selected)}] {folder.name} … ", end="", flush=True)
+        if remove_folder_icon(folder):
+            print("removed")
+        else:
+            print("failed")
+
+    print(f"\n  Done.")
+
+
+def _make_series_config_for_icon(
+    series: "DiscoveredSeries",
+    base_cfg: Config,
+) -> Config:
+    """Create a Config scoped to a series for icon fetching purposes.
+
+    Reuses the same logic as multi_series._make_series_config to keep DRY.
+    """
+    from renamer.cli.multi_series import _make_series_config
+    return _make_series_config(series, base_cfg)

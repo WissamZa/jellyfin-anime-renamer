@@ -35,6 +35,7 @@ from renamer.config import get_logger
 from renamer.providers.tmdb import TMDBSearch
 from renamer.providers.kitsu import KitsuFetcher
 from renamer.providers.registry import get_registry
+from renamer.icons import set_folder_icon
 
 log = get_logger("qbit_hook")
 
@@ -433,6 +434,16 @@ def process_torrent(
         "Done — renamed %d file(s), %d error(s) | hash=%s",
         done, errors, torrent_hash,
     )
+
+    # 8. Set folder icon from provider poster
+    try:
+        if set_folder_icon(series_folder, cfg):
+            log.info("Folder icon set for: %s", series_folder)
+        else:
+            log.info("No folder icon available for: %s", series_folder)
+    except Exception as exc:
+        log.warning("Folder icon setting failed (non-fatal): %s", exc)
+
     log.info("=" * 60)
 
 

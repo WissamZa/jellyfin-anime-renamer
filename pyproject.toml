@@ -1,11 +1,11 @@
 [project]
 name = "jellyfin-anime-renamer"
-version = "5.7.0"
-description = "Rename & organise anime episodes for Jellyfin. Hooks into qBittorrent for fully automatic post-download processing."
+version = "5.8.0"
+description = "Rename & organise anime episodes for Jellyfin. Hooks into qBittorrent for fully automatic post-download processing. Supports folder icons from provider posters."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-keywords = ["jellyfin", "anime", "renamer", "tmdb", "anilist", "kitsu", "qbittorrent"]
+keywords = ["jellyfin", "anime", "renamer", "tmdb", "anilist", "kitsu", "qbittorrent", "folder-icons"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pykakasi>=2.3.0",
     "urllib3>=2.0.0",
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.urls]
@@ -44,6 +45,7 @@ packages = [
     "renamer",
     "jellyfin_renamer.py",
     "qbit_hook.py",
+    "qbit_delete_hook.py",
 ]
 
 [dependency-groups]

@@ -60,6 +60,9 @@ def _utilities_menu_options() -> list[tuple[str, str]]:
         ("Undo previous renames", "undo"),
         ("Clear series cache", "clear_cache"),
         ("Scan library to SQLite database", "scan_db"),
+        ("Set folder icon for current series", "set_icon"),
+        ("Set folder icons for ALL series (batch)", "batch_set_icons"),
+        ("Remove folder icons (batch)", "batch_remove_icons"),
         ("<-- Back to main menu", "back"),
     ]
 
@@ -135,6 +138,12 @@ def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             print("  Series cache cleared.")
         elif action == "scan_db":
             scan_library_to_db(cfg)
+        elif action == "set_icon":
+            menus.set_icon_current_folder(cfg)
+        elif action == "batch_set_icons":
+            menus.batch_set_icons(cfg)
+        elif action == "batch_remove_icons":
+            menus.batch_remove_icons(cfg)
 
 
 def main() -> None:
@@ -164,6 +173,16 @@ def main() -> None:
         action="store_true",
         help="Run in dry-run mode (no files changed)",
     )
+    parser.add_argument(
+        "--set-icon",
+        action="store_true",
+        help="Download and set folder icon for the current series",
+    )
+    parser.add_argument(
+        "--batch-icons",
+        action="store_true",
+        help="Set folder icons for ALL series subfolders under MEDIA_DIR",
+    )
     args = parser.parse_args()
 
     cfg = build_config_from_args(args)
@@ -173,6 +192,18 @@ def main() -> None:
     if args.dry_run:
         print(BANNER)
         renamer.run(dry_run=True)
+        return
+
+    # Non-interactive: set folder icon for current series
+    if args.set_icon:
+        print(BANNER)
+        menus.set_icon_current_folder(cfg)
+        return
+
+    # Non-interactive: batch-set icons for all subfolders
+    if args.batch_icons:
+        print(BANNER)
+        menus.batch_set_icons(cfg)
         return
 
     print(BANNER)

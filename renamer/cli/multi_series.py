@@ -25,6 +25,7 @@ from renamer.renamer import AnimeRenamer
 from renamer.picker import Picker, MultiPicker
 from renamer.providers.registry import get_registry
 from renamer.cache import SeriesCache
+from renamer.icons import set_folder_icon, has_folder_icon
 
 log = get_logger()
 
@@ -449,6 +450,14 @@ def run_multi_series_menu(base_cfg: Config) -> None:
             errors = sum(1 for r in results if r.error)
             total_done += done
             total_errors += errors
+
+            # Set folder icon after renaming (live mode only)
+            if not dry_run and not has_folder_icon(series.folder):
+                try:
+                    if set_folder_icon(series.folder, cfg):
+                        print(f"  Folder icon set.")
+                except Exception as icon_exc:
+                    log.debug("Icon setting failed (non-fatal): %s", icon_exc)
         except Exception as exc:  # noqa: BLE001
             log.error("Error processing '%s': %s", series.resolved_name, exc)
             print(f"  ! Failed: {exc}")

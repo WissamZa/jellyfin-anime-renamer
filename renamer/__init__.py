@@ -12,9 +12,10 @@ Supports:
     - qBittorrent-safe moves (keeps seeding state)
     - Interactive terminal picker (fzf-style)
     - Undo-safe renames via JSON history log
+    - Folder icons from provider posters (Dolphin / Nautilus / Thunar)
 """
 
-__version__ = "5.7.0"
+__version__ = "5.8.0"
 
 from renamer.config import Config, Provider, get_logger
 from renamer.cache import SeriesCache
@@ -30,6 +31,14 @@ from renamer.providers.base import (
     SeriesSearchResult,
 )
 from renamer.providers.registry import ProviderRegistry, get_registry
+from renamer.icons import (
+    PosterResult,
+    fetch_poster,
+    has_folder_icon,
+    remove_folder_icon,
+    set_folder_icon,
+    set_folder_icon_batch,
+)
 
 __all__ = [
     "__version__",
@@ -61,4 +70,11 @@ __all__ = [
     # Registry
     "ProviderRegistry",
     "get_registry",
+    # Icons
+    "PosterResult",
+    "fetch_poster",
+    "has_folder_icon",
+    "remove_folder_icon",
+    "set_folder_icon",
+    "set_folder_icon_batch",
 ]
