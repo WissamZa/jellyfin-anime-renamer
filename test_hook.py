@@ -13,7 +13,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, NoReturn
 
 import requests
 from dotenv import load_dotenv
@@ -27,7 +27,7 @@ def fail(msg: str) -> None: print(f"  FAIL  {msg}")
 def info(msg: str) -> None: print(f"        {msg}")
 def warn(msg: str) -> None: print(f"        {msg}")
 def head(msg: str) -> None: print(f"\n{'─'*58}\n  {msg}\n{'─'*58}")
-def bail(msg: str) -> None:
+def bail(msg: str) -> NoReturn:
     fail(msg)
     print()
     sys.exit(1)
@@ -248,7 +248,8 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
     head("STEP 7 — TMDB search + romaji resolution (TMDB x AniList)")
 
     try:
-        from renamer import AniListFetcher, RomajiResolver
+        from renamer.providers.anilist import AniListFetcher
+        from renamer.providers.romaji_resolver import RomajiResolver
         from renamer.providers.tmdb import TMDBSearch
         from renamer.romaniser import _romaniser
     except ImportError as exc:
@@ -372,7 +373,8 @@ def step9_dry_run(
         return
 
     try:
-        from renamer import AniListFetcher, AnimeRenamer, Config
+        from renamer.providers.anilist import AniListFetcher
+        from renamer import AnimeRenamer, Config
     except ImportError as exc:
         bail(f"Cannot import renamer package: {exc}")
 

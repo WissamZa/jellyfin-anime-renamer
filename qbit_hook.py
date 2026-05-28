@@ -54,6 +54,16 @@ TITLE_PATTERN = re.compile(
 )
 
 
+def _parse_optional_int(val: Optional[str]) -> Optional[int]:
+    """Parse an optional string into an integer."""
+    if not val or not val.strip():
+        return None
+    try:
+        return int(val.strip())
+    except ValueError:
+        return None
+
+
 def sanitize(name: str) -> str:
     """Remove characters invalid in filenames / problematic for Jellyfin."""
     cleaned = re.sub(r'[\\/:*?"<>|;]', '', name)
@@ -295,13 +305,13 @@ def process_torrent(
     log.info("Series name: %s", series_name)
 
     # 3. Build config with manual overrides from .env
-    tmdb_id_from_env = Config._parse_optional_int(
+    tmdb_id_from_env = _parse_optional_int(
         os.getenv("TMDB_SERIES_ID", "")
     )
-    anilist_id_from_env = Config._parse_optional_int(
+    anilist_id_from_env = _parse_optional_int(
         os.getenv("ANILIST_ID", "")
     )
-    kitsu_id_from_env = Config._parse_optional_int(
+    kitsu_id_from_env = _parse_optional_int(
         os.getenv("KITSU_ID", "")
     )
     series_name_from_env = os.getenv("SERIES_NAME", "").strip()
@@ -322,7 +332,7 @@ def process_torrent(
 
     if should_search:
         registry = get_registry()
-        search_result = registry.search(ACTIVE_PROVIDER, series_name, Config())
+        search_result = registry.search(ACTIVE_PROVIDER, series_name, Config.from_env())
         if search_result:
             official_name = search_result.series_name or official_name
             if search_result.tmdb_id:
@@ -359,7 +369,7 @@ def process_torrent(
     time.sleep(3)
 
     # 7. Rename & organise via the renamer
-    cfg = Config(
+    cfg = Config.from_env(
         series_name=official_name,
         tmdb_series_id=tmdb_id,
         anilist_id=anilist_id,
@@ -390,6 +400,23 @@ def main() -> None:
 
     # 2. Parse arguments or fallback to the last completed torrent
     n_limit = None
+    target_hash = None
+
+    if "--hash" in sys.argv:
+        try:
+            idx = sys.argv.index("--hash")
+            target_hash = sys.argv[idx + 1]
+        except IndexError:
+            log.error("Missing hash value. Usage: python qbit_hook.py --hash <hash>")
+            sys.exit(1)
+    elif "-hash" in sys.argv:
+        try:
+            idx = sys.argv.index("-hash")
+            target_hash = sys.argv[idx + 1]
+        except IndexError:
+            log.error("Missing hash value. Usage: python qbit_hook.py -hash <hash>")
+            sys.exit(1)
+
     if "-n" in sys.argv:
         try:
             idx = sys.argv.index("-n")
@@ -400,7 +427,14 @@ def main() -> None:
             )
             sys.exit(1)
 
-    if n_limit is not None or len(sys.argv) < 3:
+    if target_hash:
+        log.info("Explicit hash requested: %s", target_hash)
+        t = qbit.torrent_info(target_hash)
+        if not t:
+            log.error("Could not find torrent with hash %s in qBittorrent.", target_hash)
+            sys.exit(1)
+        process_torrent(qbit, t["hash"], t["name"])
+    elif n_limit is not None or len(sys.argv) < 3:
         limit = n_limit if n_limit is not None else 1
         log.info(
             "No explicit trigger arguments. Checking the last %d completed torrents...",
