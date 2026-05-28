@@ -126,7 +126,7 @@ def scan_series_folders(media_dir: Path) -> list[Path]:
     Return all immediate subfolders of *media_dir* that look like anime series
     (i.e. contain at least one video file somewhere beneath them).
     """
-    VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".flv", ".webm"}
+    VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".m4v", ".flv", ".webm", ".ass", ".srt"}
     folders: list[Path] = []
 
     if not media_dir.is_dir():

@@ -446,7 +446,8 @@ class AnimeRenamer:
     ) -> RenameResult:
         """Compute the new name, log it, and (in live mode) rename the file."""
         cfg = self._cfg
-        new_name = self._format_name(info, path.suffix, season_offsets)
+        ext = _get_full_suffix(path)
+        new_name = self._format_name(info, ext, season_offsets)
 
         if cfg.organize_into_folders:
             dest_folder = self._season_folder(info.season) if not dry_run else (
@@ -635,3 +636,13 @@ def _format_episode_number(n: int) -> str:
     if n >= 100:
         return f"{n:03d}"
     return f"{n:02d}"
+
+
+def _get_full_suffix(path: Path) -> str:
+    """Get file extension, preserving language tags for subtitle files."""
+    name = path.name
+    # Match a language code like .en or .zh-CN followed by subtitle extension
+    m = re.search(r"(\.[a-zA-Z\-]{2,6})\.(srt|ass|vtt)$", name, re.IGNORECASE)
+    if m:
+        return m.group(1) + "." + m.group(2)
+    return path.suffix

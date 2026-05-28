@@ -154,7 +154,7 @@ class Config:
 
     # ── File handling ────────────────────────────────────────
     video_extensions: Sequence[str] = field(
-        default_factory=lambda: (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm")
+        default_factory=lambda: (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm", ".ass", ".srt")
     )
 
     # ── HTTP ─────────────────────────────────────────────────
@@ -166,7 +166,7 @@ class Config:
     def __post_init__(self) -> None:
         """Coerce types and guard against None values that slip through."""
         # provider=None happens when CLI passes no --provider flag
-        if self.provider is None:
+        if getattr(self, "provider", None) is None:
             self.provider = Provider.TMDB
         # media_dir might arrive as a plain string from some callers
         if not isinstance(self.media_dir, Path):

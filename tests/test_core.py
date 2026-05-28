@@ -16,6 +16,7 @@ from renamer.renamer import (
     _clean_special_title,
     _compute_display_episode,
     _format_episode_number,
+    _get_full_suffix,
     sanitize_name,
 )
 
@@ -246,3 +247,21 @@ class TestComputeSeasonOffsets:
         offsets = AnimeRenamer._compute_season_offsets(em)
         assert 0 not in offsets
         assert offsets[1] == 0
+
+
+# ---------------------------------------------------------------------------
+# _get_full_suffix
+# ---------------------------------------------------------------------------
+
+class TestGetFullSuffix:
+    @pytest.mark.parametrize("filename,expected", [
+        ("Show_01.mkv", ".mkv"),
+        ("Show_01.en.srt", ".en.srt"),
+        ("Show_01.eng.ass", ".eng.ass"),
+        ("Show_01.zh-CN.srt", ".zh-CN.srt"),
+        ("Show_01.srt", ".srt"),
+        ("Show_01.vtt", ".vtt"),
+        ("Show_01.ja.vtt", ".ja.vtt"),
+    ])
+    def test_get_full_suffix(self, filename, expected):
+        assert _get_full_suffix(Path(filename)) == expected
