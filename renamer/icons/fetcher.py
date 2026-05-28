@@ -11,10 +11,9 @@ calls for the same series don't hit the API again.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from renamer.config import Config, Provider, get_logger
-from renamer.providers.base import EpisodeFetcher
+from renamer.providers.base import EpisodeFetcher, EpisodeInfo
 
 log = get_logger()
 
@@ -37,7 +36,7 @@ class PosterResult:
 # TMDB poster fetcher
 # ---------------------------------------------------------------------------
 
-def fetch_tmdb_poster(cfg: Config) -> Optional[PosterResult]:
+def fetch_tmdb_poster(cfg: Config) -> PosterResult | None:
     """
     Fetch the poster URL for the configured series from TMDB.
 
@@ -105,7 +104,7 @@ query ($id: Int, $search: String) {
 """
 
 
-def fetch_anilist_poster(cfg: Config) -> Optional[PosterResult]:
+def fetch_anilist_poster(cfg: Config) -> PosterResult | None:
     """
     Fetch the poster URL for the configured series from AniList.
 
@@ -152,7 +151,7 @@ def fetch_anilist_poster(cfg: Config) -> Optional[PosterResult]:
 # Kitsu poster fetcher
 # ---------------------------------------------------------------------------
 
-def fetch_kitsu_poster(cfg: Config) -> Optional[PosterResult]:
+def fetch_kitsu_poster(cfg: Config) -> PosterResult | None:
     """
     Fetch the poster URL for the configured series from Kitsu.
 
@@ -201,7 +200,7 @@ def fetch_kitsu_poster(cfg: Config) -> Optional[PosterResult]:
 # Unified fetch: try all providers, return the best result
 # ---------------------------------------------------------------------------
 
-def fetch_poster(cfg: Config) -> Optional[PosterResult]:
+def fetch_poster(cfg: Config) -> PosterResult | None:
     """
     Try to fetch a poster URL using the configured provider first,
     then fall back to the other providers if the primary one fails.
@@ -256,9 +255,9 @@ class _IconGetHelper(EpisodeFetcher):
 
     name = "IconFetchHelper"
 
-    def fetch(self) -> Optional[dict[int, "EpisodeInfo"]]:  # noqa: D401
+    def fetch(self) -> dict[int, EpisodeInfo] | None:  # noqa: D401
         """Not used — exists only to satisfy the abstract base class."""
         return None
 
-    def fetch_specials(self) -> dict[int, "EpisodeInfo"]:
+    def fetch_specials(self) -> dict[int, EpisodeInfo]:
         return {}

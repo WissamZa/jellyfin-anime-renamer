@@ -4,10 +4,11 @@ tests/test_core.py
 Unit tests for the core, side-effect-free functions.
 """
 
-import pytest
 from pathlib import Path
 
-from renamer.config import Config, Provider, START_MODE_CONTINUING, START_MODE_PER_SEASON
+import pytest
+
+from renamer.config import START_MODE_CONTINUING, START_MODE_PER_SEASON, Config, Provider
 from renamer.parsers import EpisodeNumberParser, SpecialParser
 from renamer.providers.base import EpisodeInfo, RenameResult
 from renamer.renamer import (
@@ -17,7 +18,6 @@ from renamer.renamer import (
     _format_episode_number,
     sanitize_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # sanitize_name

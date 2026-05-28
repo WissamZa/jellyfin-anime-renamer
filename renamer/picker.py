@@ -12,11 +12,11 @@ Falls back to simple ``input()`` when stdin is not a TTY (piped mode,
 IDE terminals, etc.).
 """
 
-import os
+import contextlib
 import re
 import shutil
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 # ── ANSI helpers ──────────────────────────────────────────────
 _BOLD_CYAN = "\033[1;36m"
@@ -128,7 +128,7 @@ class Picker:
 
     def __init__(
         self,
-        options: List[Tuple[str, Any]],
+        options: list[tuple[str, Any]],
         title: str = "",
         indicator: str = ">",
         default_index: int = 0,
@@ -147,7 +147,7 @@ class Picker:
         self._lines_drawn: int = 0  # for final cleanup only
 
     # ── public API ────────────────────────────────────────────
-    def run(self) -> Optional[Tuple[int, Any]]:
+    def run(self) -> tuple[int, Any] | None:
         """
         Show the picker and block until the user makes a choice.
 
@@ -159,6 +159,7 @@ class Picker:
         try:
             import termios
             import tty
+            _ = tty  # noqa: F841
         except ImportError:
             return self._fallback()
 
@@ -170,16 +171,13 @@ class Picker:
             return self._fallback()
         finally:
             # Always restore terminal + cursor
-            try:
+            with contextlib.suppress(Exception):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            except Exception:
-                pass
             sys.stdout.write(_SHOW_CURSOR)
             sys.stdout.flush()
 
     # ── interactive TTY path ──────────────────────────────────
-    def _run_tty(self, fd: int, old_settings) -> Optional[Tuple[int, Any]]:
-        import termios
+    def _run_tty(self, fd: int, old_settings) -> tuple[int, Any] | None:
         import tty
 
         tty.setcbreak(fd)
@@ -225,7 +223,7 @@ class Picker:
             self._draw()
 
     # ── fallback (non-TTY / error) ───────────────────────────
-    def _fallback(self) -> Optional[Tuple[int, Any]]:
+    def _fallback(self) -> tuple[int, Any] | None:
         """Simple ``input()`` based selection for non-TTY environments."""
         self._print_static()
         try:
@@ -241,7 +239,7 @@ class Picker:
                 return idx, self.options[idx][1]
         except ValueError:
             pass
-        print(f"  Invalid choice.")
+        print("  Invalid choice.")
         return None
 
     # ── drawing helpers ───────────────────────────────────────
@@ -348,10 +346,10 @@ class Picker:
 
 # ── Convenience function ──────────────────────────────────────
 def pick(
-    options: List[Tuple[str, Any]],
+    options: list[tuple[str, Any]],
     title: str = "",
     default_index: int = 0,
-) -> Optional[Tuple[int, Any]]:
+) -> tuple[int, Any] | None:
     """
     One-shot picker.  Returns ``(index, value)`` or ``None``.
 
@@ -391,10 +389,10 @@ class MultiPicker:
 
     def __init__(
         self,
-        options: List[Tuple[str, Any]],
+        options: list[tuple[str, Any]],
         title: str = "",
         indicator: str = ">",
-        preselected: Optional[List[int]] = None,
+        preselected: list[int] | None = None,
     ):
         if not options:
             raise ValueError("MultiPicker requires at least one option.")
@@ -410,7 +408,7 @@ class MultiPicker:
 
     # ── public API ────────────────────────────────────────────
 
-    def run(self) -> Optional[List[Tuple[int, Any]]]:
+    def run(self) -> list[tuple[int, Any]] | None:
         """
         Show the multi-picker and block until the user confirms or cancels.
 
@@ -422,6 +420,7 @@ class MultiPicker:
         try:
             import termios
             import tty
+            _ = tty  # noqa: F841
         except ImportError:
             return self._fallback()
 
@@ -432,17 +431,14 @@ class MultiPicker:
         except Exception:
             return self._fallback()
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            except Exception:
-                pass
             sys.stdout.write(_SHOW_CURSOR)
             sys.stdout.flush()
 
     # ── interactive TTY path ──────────────────────────────────
 
-    def _run_tty(self, fd: int, old_settings) -> Optional[List[Tuple[int, Any]]]:
-        import termios
+    def _run_tty(self, fd: int, old_settings) -> list[tuple[int, Any]] | None:
         import tty
 
         tty.setcbreak(fd)
@@ -485,7 +481,7 @@ class MultiPicker:
 
     # ── fallback ─────────────────────────────────────────────
 
-    def _fallback(self) -> Optional[List[Tuple[int, Any]]]:
+    def _fallback(self) -> list[tuple[int, Any]] | None:
         """Simple input()-based multi-selection for non-TTY environments."""
         self._print_static()
         print(
@@ -602,10 +598,10 @@ class MultiPicker:
 
 
 def multi_pick(
-    options: List[Tuple[str, Any]],
+    options: list[tuple[str, Any]],
     title: str = "",
-    preselected: Optional[List[int]] = None,
-) -> Optional[List[Tuple[int, Any]]]:
+    preselected: list[int] | None = None,
+) -> list[tuple[int, Any]] | None:
     """
     One-shot multi-picker.  Returns a list of ``(index, value)`` or ``None``.
 

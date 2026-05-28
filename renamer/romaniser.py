@@ -5,7 +5,6 @@ romaniser — Japanese-to-romaji conversion and smart anime title-casing.
 import json
 import re
 from pathlib import Path
-from typing import Optional
 
 from renamer.config import get_logger
 

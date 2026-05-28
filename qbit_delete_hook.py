@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from renamer import get_logger
+from renamer import get_logger  # noqa: E402
 
 log = get_logger("qbit_delete_hook")
 

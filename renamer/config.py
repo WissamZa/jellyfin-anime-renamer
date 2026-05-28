@@ -22,9 +22,12 @@ import logging.handlers
 import os
 import sys
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -76,7 +79,7 @@ log = get_logger()
 # ---------------------------------------------------------------------------
 
 
-class Provider(str, Enum):
+class Provider(StrEnum):
     """Metadata provider."""
 
     TMDB = "tmdb"
@@ -84,7 +87,7 @@ class Provider(str, Enum):
     Kitsu = "kitsu"
 
     @classmethod
-    def from_str(cls, value: str) -> "Provider":
+    def from_str(cls, value: str) -> Provider:
         """Case-insensitive lookup; defaults to TMDB on unknown value."""
         try:
             return cls(value.strip().lower())
@@ -129,10 +132,10 @@ class Config:
 
     # ── Series identity ──────────────────────────────────────
     series_name: str = ""
-    tmdb_series_id: Optional[int] = None
-    anilist_id: Optional[int] = None
-    kitsu_id: Optional[int] = None
-    episode_group_id: Optional[str] = None
+    tmdb_series_id: int | None = None
+    anilist_id: int | None = None
+    kitsu_id: int | None = None
+    episode_group_id: str | None = None
 
     # ── Paths ────────────────────────────────────────────────
     media_dir: Path = field(default_factory=lambda: Path("."))
@@ -177,7 +180,7 @@ class Config:
     # ── Factory ─────────────────────────────────────────────
 
     @classmethod
-    def from_env(cls, **overrides) -> "Config":
+    def from_env(cls, **overrides) -> Config:
         """
         Build a Config from environment variables (+ optional .env file).
 
@@ -186,7 +189,7 @@ class Config:
         """
         _load_dotenv_once()
 
-        def _int(key: str) -> Optional[int]:
+        def _int(key: str) -> int | None:
             raw = os.getenv(key, "").strip()
             if not raw:
                 return None

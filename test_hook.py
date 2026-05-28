@@ -11,9 +11,8 @@ Fix failures top-to-bottom before using the real hook.
 import os
 import re
 import sys
-import time
 from pathlib import Path
-from typing import Optional, NoReturn
+from typing import NoReturn
 
 import requests
 from dotenv import load_dotenv
@@ -86,8 +85,8 @@ def step2_qbit_login(env: dict) -> requests.Session:
         if r.status_code in (200, 204):
             if r.text.strip().lower() == "fails.":
                 bail(
-                    f"Login rejected — wrong username or password.\n"
-                    f"  Check QBIT_USERNAME / QBIT_PASSWORD in .env"
+                    "Login rejected — wrong username or password.\n"
+                    "  Check QBIT_USERNAME / QBIT_PASSWORD in .env"
                 )
             ok(f"Logged into qBittorrent at {url}")
         else:
@@ -200,7 +199,7 @@ def step5_nyaa(torrent: dict) -> str:
             return nyaa_title
 
         warn("Hash not found on Nyaa — using torrent name as fallback")
-        info(f"  This is normal for private trackers or older torrents.")
+        info("  This is normal for private trackers or older torrents.")
         info(f"  Fallback: {fallback}")
         return fallback
 
@@ -258,7 +257,7 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
             "  Make sure the renamer/ package is in the same folder."
         )
 
-    searcher = TMDBSearch(env["TMDB_API_KEY"])
+    TMDBSearch(env["TMDB_API_KEY"])
 
     # ── TMDB search
     tmdb_data = requests.get(
@@ -373,8 +372,8 @@ def step9_dry_run(
         return
 
     try:
-        from renamer.providers.anilist import AniListFetcher
         from renamer import AnimeRenamer, Config
+        from renamer.providers.anilist import AniListFetcher
     except ImportError as exc:
         bail(f"Cannot import renamer package: {exc}")
 
@@ -435,7 +434,7 @@ def summary(torrent: dict, tmdb_id: int, final_romaji: str, env: dict) -> None:
     print("  Expected result:")
     print(f"    Series  -> '{final_romaji}'")
     print(f"    Dest    -> {base / final_romaji}/")
-    print(f"              Season 01/, Season 02/, ..., Specials/")
+    print("              Season 01/, Season 02/, ..., Specials/")
     print()
     print("  To watch the hook live:")
     print("    tail -f renamer.log")

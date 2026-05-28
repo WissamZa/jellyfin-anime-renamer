@@ -4,24 +4,30 @@ renamer.cli.menus
 Interactive selection menus and configuration prompts for Jellyfin Anime Renamer.
 """
 
+import contextlib
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from renamer.cli.multi_series import DiscoveredSeries
+
+from renamer.cache import SeriesCache
 from renamer.config import (
-    Config,
-    Provider,
     START_MODE_CONTINUING,
     START_MODE_PER_SEASON,
+    Config,
+    Provider,
     get_logger,
 )
-from renamer.renamer import AnimeRenamer
-from renamer.picker import Picker
-from renamer.providers.base import EpisodeGroupInfo
-from renamer.romaniser import get_romaniser
-from renamer.cache import SeriesCache
 from renamer.icons import (
     has_folder_icon,
     remove_folder_icon,
     set_folder_icon,
-    set_folder_icon_batch,
 )
+from renamer.picker import Picker
+from renamer.providers.base import EpisodeGroupInfo
+from renamer.renamer import AnimeRenamer
+from renamer.romaniser import get_romaniser
 
 log = get_logger()
 
@@ -524,7 +530,6 @@ def _set_env_value(key: str, value: str) -> None:
 def configure_qbit_hook(cfg: Config) -> None:
     """Submenu to configure global qBittorrent & hook defaults (saved to .env)."""
     import os
-    from pathlib import Path
 
     while True:
         # Read directly from environment/env files or fallback to Config
@@ -590,10 +595,8 @@ def configure_hook_defaults(cfg: Config) -> None:
     # Load configuration
     conf = {}
     if conf_path.exists():
-        try:
+        with contextlib.suppress(Exception):
             conf = json.loads(conf_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
             
     if "global" not in conf:
         conf["global"] = {}
@@ -617,7 +620,7 @@ def configure_hook_defaults(cfg: Config) -> None:
             (f"Global Provider           : {provider}", "provider"),
             (f"Global Episode Start Mode : {start_mode}", "start_mode"),
             (f"Global Absolute Numbering : {abs_num}", "abs_num"),
-            (f"Configure Series Overrides (Custom Groups, Names, etc.) -->", "series_overrides"),
+            ("Configure Series Overrides (Custom Groups, Names, etc.) -->", "series_overrides"),
             ("<-- Back", "back"),
         ]
         
@@ -787,7 +790,7 @@ def set_icon_current_folder(cfg: Config) -> None:
         return
 
     if has_folder_icon(folder):
-        print(f"\n  This folder already has a custom icon.")
+        print("\n  This folder already has a custom icon.")
         overwrite = input("  Overwrite? (y/N): ").strip().lower()
         if overwrite != "y":
             print("  Cancelled.")
@@ -797,12 +800,12 @@ def set_icon_current_folder(cfg: Config) -> None:
     print(f"  Provider: {cfg.provider.value}")
 
     if set_folder_icon(folder, cfg):
-        print(f"  Folder icon set successfully!")
+        print("  Folder icon set successfully!")
         print(f"  Icon file: {folder}/.folder_icon.png")
         print(f"  Config:    {folder}/.directory")
     else:
         print(f"  No poster found for '{cfg.series_name}'.")
-        print(f"  Make sure the series is identified (TMDB/AniList/Kitsu ID set).")
+        print("  Make sure the series is identified (TMDB/AniList/Kitsu ID set).")
 
 
 def remove_icon_current_folder(cfg: Config) -> None:
@@ -975,7 +978,7 @@ def batch_remove_icons(cfg: Config) -> None:
         else:
             print("failed")
 
-    print(f"\n  Done.")
+    print("\n  Done.")
 
 
 def _make_series_config_for_icon(

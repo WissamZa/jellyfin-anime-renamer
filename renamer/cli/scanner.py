@@ -5,6 +5,7 @@ Media library scanning logic for Jellyfin Anime Renamer.
 """
 
 import sqlite3
+
 from renamer.config import Config
 from renamer.parsers import EpisodeNumberParser, SpecialParser
 

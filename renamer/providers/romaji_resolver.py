@@ -4,10 +4,8 @@ providers.romaji_resolver — RomajiResolver (AniList primary, TMDB romaji fallb
 No AniDB step — removed in v5.
 """
 
-from typing import Optional
 
 from renamer.config import get_logger
-from renamer.romaniser import get_romaniser
 
 log = get_logger()
 
@@ -76,5 +74,5 @@ class RomajiResolver:
         if not a or not b:
             return 0.0
         longer = max(len(a), len(b))
-        matches = sum(c1 == c2 for c1, c2 in zip(a, b))
+        matches = sum(c1 == c2 for c1, c2 in zip(a, b, strict=False))
         return matches / longer

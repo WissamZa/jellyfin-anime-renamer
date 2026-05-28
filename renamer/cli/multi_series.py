@@ -16,16 +16,18 @@ Features
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
-from typing import Optional
-
 import sqlite3
-from renamer.config import Config, Provider, get_logger
-from renamer.renamer import AnimeRenamer
-from renamer.picker import Picker, MultiPicker
-from renamer.providers.registry import get_registry
+from typing import TYPE_CHECKING
+
 from renamer.cache import SeriesCache
-from renamer.icons import set_folder_icon, has_folder_icon
+from renamer.config import Config, Provider, get_logger
+from renamer.icons import has_folder_icon, set_folder_icon
+from renamer.picker import MultiPicker, Picker
+from renamer.providers.registry import get_registry
+from renamer.renamer import AnimeRenamer
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 log = get_logger()
 
@@ -61,7 +63,7 @@ class LibraryDBCache:
             """)
         return conn
 
-    def get(self, folder_name: str) -> Optional[dict]:
+    def get(self, folder_name: str) -> dict | None:
         """Fetch cached series metadata by folder name."""
         try:
             with self._get_conn() as conn:
@@ -80,9 +82,9 @@ class LibraryDBCache:
         folder_name: str,
         resolved_name: str,
         provider: Provider,
-        tmdb_id: Optional[int] = None,
-        anilist_id: Optional[int] = None,
-        kitsu_id: Optional[int] = None,
+        tmdb_id: int | None = None,
+        anilist_id: int | None = None,
+        kitsu_id: int | None = None,
     ) -> None:
         """Insert or update series metadata in the central cache."""
         try:
@@ -109,9 +111,9 @@ class DiscoveredSeries:
     folder: Path            # absolute path to the series folder
     folder_name: str        # raw folder name (used as the search query)
     resolved_name: str      # best title after provider lookup (may equal folder_name)
-    tmdb_id: Optional[int] = None
-    anilist_id: Optional[int] = None
-    kitsu_id: Optional[int] = None
+    tmdb_id: int | None = None
+    anilist_id: int | None = None
+    kitsu_id: int | None = None
     provider: Provider = Provider.TMDB
 
 
@@ -455,7 +457,7 @@ def run_multi_series_menu(base_cfg: Config) -> None:
             if not dry_run and not has_folder_icon(series.folder):
                 try:
                     if set_folder_icon(series.folder, cfg):
-                        print(f"  Folder icon set.")
+                        print("  Folder icon set.")
                 except Exception as icon_exc:
                     log.debug("Icon setting failed (non-fatal): %s", icon_exc)
         except Exception as exc:  # noqa: BLE001

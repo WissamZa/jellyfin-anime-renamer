@@ -21,7 +21,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -65,7 +65,7 @@ class RenameResult:
     renamed: str
     episode: EpisodeInfo
     dest_dir: str = ""
-    status: "RenameResult.Status" = field(default_factory=lambda: RenameResult.Status.PENDING)
+    status: RenameResult.Status = field(default_factory=lambda: RenameResult.Status.PENDING)
     error: str = ""
 
     # Convenience helpers (keep backwards compatibility)
@@ -121,9 +121,9 @@ class SeriesSearchResult:
     provider: str
     series_id: int
     series_name: str
-    tmdb_id: Optional[int] = None
-    anilist_id: Optional[int] = None
-    kitsu_id: Optional[int] = None
+    tmdb_id: int | None = None
+    anilist_id: int | None = None
+    kitsu_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ def _build_session(retries: int = 0) -> requests.Session:
 
 
 # Module-level shared session (one per process, reset via clear_session())
-_shared_session: Optional[requests.Session] = None
+_shared_session: requests.Session | None = None
 
 
 def _get_shared_session() -> requests.Session:
@@ -179,10 +179,10 @@ class EpisodeFetcher(ABC):
 
     def __init__(self) -> None:
         # Per-instance response cache keyed by (url, frozen_params)
-        self._cache: dict[tuple, Optional[dict[str, Any]]] = {}
+        self._cache: dict[tuple, dict[str, Any] | None] = {}
 
     @abstractmethod
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         """Return a mapping of absolute-episode-number -> EpisodeInfo."""
         ...
 
@@ -194,12 +194,12 @@ class EpisodeFetcher(ABC):
     def _get(
         self,
         url: str,
-        params: Optional[dict] = None,
-        cfg: Optional[Config] = None,
-        headers: Optional[dict] = None,
+        params: dict | None = None,
+        cfg: Config | None = None,
+        headers: dict | None = None,
         *,
-        session: Optional[requests.Session] = None,
-    ) -> Optional[dict[str, Any]]:
+        session: requests.Session | None = None,
+    ) -> dict[str, Any] | None:
         """
         HTTP GET with in-memory caching and rate-limit back-off.
 
@@ -224,7 +224,7 @@ class EpisodeFetcher(ABC):
 
         _cfg = cfg or Config()
         _session = session or _get_shared_session()
-        result: Optional[dict[str, Any]] = None
+        result: dict[str, Any] | None = None
 
         for attempt in range(1, _cfg.retry_attempts + 1):
             try:

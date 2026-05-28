@@ -5,7 +5,7 @@ Uses the Kitsu JSON API to search anime and walk sequel chains
 to build multi-season episode mappings.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from renamer.config import Config, get_logger
 from renamer.providers.base import EpisodeFetcher, EpisodeInfo
@@ -32,8 +32,8 @@ class KitsuFetcher(EpisodeFetcher):
 
     def __init__(
         self,
-        kitsu_id: Optional[int] = None,
-        cfg: Optional[Config] = None,
+        kitsu_id: int | None = None,
+        cfg: Config | None = None,
     ):
         super().__init__()
         self._id = kitsu_id
@@ -43,8 +43,8 @@ class KitsuFetcher(EpisodeFetcher):
     def _kitsu_get(
         self,
         url: str,
-        params: Optional[dict] = None,
-    ) -> Optional[dict[str, Any]]:
+        params: dict | None = None,
+    ) -> dict[str, Any] | None:
         """HTTP GET with caching for Kitsu API."""
         return self._get(
             url,
@@ -54,7 +54,7 @@ class KitsuFetcher(EpisodeFetcher):
         )
 
     # ── Series search ──────────────────────────────────────
-    def find_series(self, name: str) -> Optional[tuple[int, str]]:
+    def find_series(self, name: str) -> tuple[int, str] | None:
         """
         Search Kitsu by name.
         Returns (kitsu_id, romaji_name) or None.
@@ -123,12 +123,12 @@ class KitsuFetcher(EpisodeFetcher):
         )
         return chain
 
-    def _get_sequel_id(self, data: dict) -> Optional[int]:
+    def _get_sequel_id(self, data: dict) -> int | None:
         """Extract the first sequel ID from included data or relationships."""
         # Check included entries for sequels
         included = data.get("included", [])
         for item in included:
-            rels = item.get("relationships", {})
+            item.get("relationships", {})
             # If this is a sequel relationship entry, check if it links forward
             pass
 
@@ -189,7 +189,7 @@ class KitsuFetcher(EpisodeFetcher):
         return episodes
 
     # ── Main fetch ─────────────────────────────────────────
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         if not self._id:
             log.error("Kitsu ID is required for fetch().")
             return None

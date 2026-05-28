@@ -6,12 +6,12 @@ Uses a temp directory with fake video files — no network calls.
 """
 
 import json
-import pytest
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from renamer.config import Config, Provider
-from renamer.providers.base import EpisodeInfo, RenameResult
+import pytest
+
+from renamer.config import Config
+from renamer.providers.base import EpisodeInfo
 from renamer.renamer import AnimeRenamer
 
 

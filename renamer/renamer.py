@@ -10,13 +10,11 @@ All interactive prompts live in ``jellyfin_renamer.py``.
 from __future__ import annotations
 
 import re
-from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING
 
 from renamer.cache import SeriesCache
 from renamer.config import (
     START_MODE_CONTINUING,
-    START_MODE_PER_SEASON,
     Config,
     Provider,
     get_logger,
@@ -25,6 +23,10 @@ from renamer.history import RenameHistory
 from renamer.parsers import EpisodeNumberParser, SpecialParser
 from renamer.providers.base import EpisodeGroupInfo, EpisodeInfo, RenameResult
 from renamer.providers.registry import get_registry
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 log = get_logger()
 
@@ -69,7 +71,7 @@ class AnimeRenamer:
     def __init__(
         self,
         cfg: Config,
-        rename_via_qbit: Optional[Callable[[Path, Path, str], None]] = None,
+        rename_via_qbit: Callable[[Path, Path, str], None] | None = None,
     ) -> None:
         self._cfg = cfg
         self._history = RenameHistory(cfg.history_file)
@@ -95,7 +97,7 @@ class AnimeRenamer:
         self._load_cache()
 
         if not self._cfg.series_name:
-            self._cfg.series_name = self._cfg.media_dir.name
+            self._cfg.series_name = self._cfg.media_dir.resolve().name
 
         self._auto_search_series()
 
@@ -203,7 +205,7 @@ class AnimeRenamer:
         elif isinstance(raw_provider, str) and raw_provider:
             cfg.provider = Provider.from_str(raw_provider)
         # Never let provider become None
-        if cfg.provider is None:
+        if getattr(cfg, "provider", None) is None:
             cfg.provider = Provider.TMDB
         if not cfg.episode_group_id and data.get("episode_group_id"):
             cfg.episode_group_id = data["episode_group_id"]
@@ -478,7 +480,7 @@ class AnimeRenamer:
                     dest_path.parent.mkdir(exist_ok=True)
 
                 if self._rename_via_qbit:
-                    self._rename_via_qbit(old_path=path, new_path=dest_path, new_name=new_name)
+                    self._rename_via_qbit(path, dest_path, new_name)
                 else:
                     path.rename(dest_path)
 
@@ -524,7 +526,7 @@ class AnimeRenamer:
         self,
         info: EpisodeInfo,
         ext: str,
-        season_offsets: Optional[dict[int, int]] = None,
+        season_offsets: dict[int, int] | None = None,
     ) -> str:
         series = sanitize_name(self._cfg.series_name)
         clean_title = sanitize_name(info.title)

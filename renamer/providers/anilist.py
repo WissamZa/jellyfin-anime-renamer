@@ -3,7 +3,6 @@ providers.anilist — AniListFetcher (GraphQL API).
 """
 
 import re
-from typing import Optional
 
 import requests
 
@@ -47,11 +46,11 @@ class AniListFetcher(EpisodeFetcher):
     }
     """
 
-    def __init__(self, anime_id: Optional[int] = None):
+    def __init__(self, anime_id: int | None = None):
         super().__init__()
         self._id = anime_id
 
-    def _gql(self, query: str, variables: dict) -> Optional[dict]:
+    def _gql(self, query: str, variables: dict) -> dict | None:
         # AniList uses POST, so cache by query + variables
         cache_key = ("anilist_gql", query, frozenset(variables.items()))
         if cache_key in self._cache:
@@ -74,12 +73,12 @@ class AniListFetcher(EpisodeFetcher):
         self._cache[cache_key] = None
         return None
 
-    def find_id(self, name: str) -> Optional[int]:
+    def find_id(self, name: str) -> int | None:
         """Search AniList by name and return the AniList series ID."""
         media = self._gql(self.SERIES_QUERY, {"search": name})
         return media.get("id") if media else None
 
-    def find_romaji(self, name: str) -> Optional[str]:
+    def find_romaji(self, name: str) -> str | None:
         """
         Search AniList by name and return the official romaji title.
         Also caches the resolved AniList ID on self._id for later use.
@@ -99,7 +98,7 @@ class AniListFetcher(EpisodeFetcher):
         )
         return romaji or english
 
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         if not self._id:
             return None
         log.info(

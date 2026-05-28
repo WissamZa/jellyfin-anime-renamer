@@ -23,24 +23,23 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import requests
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from renamer import AnimeRenamer, Config, Provider
-from renamer.config import get_logger
-from renamer.providers.tmdb import TMDBSearch
-from renamer.providers.kitsu import KitsuFetcher
-from renamer.providers.registry import get_registry
-from renamer.icons import set_folder_icon
+from renamer import AnimeRenamer, Config, Provider  # noqa: E402
+from renamer.config import get_logger  # noqa: E402
+from renamer.icons import set_folder_icon  # noqa: E402
+from renamer.providers.registry import get_registry  # noqa: E402
 
 log = get_logger("qbit_hook")
 
 # Load global & series configuration from JSON
-import json
+import json  # noqa: E402
+
+
 def load_hook_config() -> dict:
     conf_path = Path(__file__).resolve().parent / "qbit_hook.json"
     if conf_path.exists():
@@ -76,7 +75,7 @@ TITLE_PATTERN = re.compile(
 )
 
 
-def _parse_optional_int(val: Optional[str]) -> Optional[int]:
+def _parse_optional_int(val: str | None) -> int | None:
     """Parse an optional string into an integer."""
     if not val or not val.strip():
         return None
@@ -168,7 +167,7 @@ class QBitClient:
             log.error("Could not fetch file list: %s", e)
             return []
 
-    def torrent_info(self, torrent_hash: str) -> Optional[dict]:
+    def torrent_info(self, torrent_hash: str) -> dict | None:
         try:
             r = self._s.get(
                 f"{self._url}/api/v2/torrents/info",
@@ -229,7 +228,7 @@ def lookup_nyaa_title(torrent_hash: str, fallback: str) -> str:
 
 
 # ══════════════════ SERIES NAME EXTRACTION ════════════════
-def extract_series_name(title: str) -> Optional[str]:
+def extract_series_name(title: str) -> str | None:
     """
     Tries the fansub regex first, then falls back to stripping
     common suffixes (episode numbers, resolution tags, group tags).
@@ -359,11 +358,7 @@ def process_torrent(
         provider = Provider.from_str(series_conf["provider"])
 
     should_search = True
-    if provider == Provider.TMDB and tmdb_id:
-        should_search = False
-    elif provider == Provider.AniList and anilist_id:
-        should_search = False
-    elif provider == Provider.Kitsu and kitsu_id:
+    if provider == Provider.TMDB and tmdb_id or provider == Provider.AniList and anilist_id or provider == Provider.Kitsu and kitsu_id:
         should_search = False
 
     if should_search:

@@ -5,7 +5,6 @@ parsers — EpisodeNumberParser and SpecialParser.
 import json
 import re
 from pathlib import Path
-from typing import Optional
 
 from renamer.config import get_logger
 
@@ -70,8 +69,8 @@ class SpecialParser:
     def parse(
         cls,
         filename: str,
-        extra_named_specials: Optional[list[str]] = None,
-    ) -> Optional[int]:
+        extra_named_specials: list[str] | None = None,
+    ) -> int | None:
         """
         Parse filename for special-episode indicators.
 
@@ -125,7 +124,7 @@ class EpisodeNumberParser:
     @classmethod
     def parse_season_episode(
         cls, filename: str
-    ) -> tuple[Optional[int], Optional[int]]:
+    ) -> tuple[int | None, int | None]:
         stem = Path(filename).stem
         for pattern in cls.SEASON_EP_PATTERNS:
             m = pattern.search(stem)
@@ -134,7 +133,7 @@ class EpisodeNumberParser:
         return None, None
 
     @classmethod
-    def parse(cls, filename: str) -> Optional[int]:
+    def parse(cls, filename: str) -> int | None:
         stem = Path(filename).stem
         for _label, pattern in cls.PATTERNS:
             m = re.search(pattern, stem, re.IGNORECASE)

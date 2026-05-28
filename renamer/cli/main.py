@@ -6,18 +6,17 @@ The main execution loops, CLI argument parsing, and menu routing.
 
 import argparse
 import sys
-from pathlib import Path
 
 from renamer import __version__
-from renamer.config import Config, Provider, get_logger
-from renamer.renamer import AnimeRenamer
 from renamer.cache import SeriesCache
-from renamer.picker import Picker
 
 # CLI submodules
 from renamer.cli import menus
-from renamer.cli.scanner import scan_library_to_db
 from renamer.cli.multi_series import run_multi_series_menu
+from renamer.cli.scanner import scan_library_to_db
+from renamer.config import Config, Provider, get_logger
+from renamer.picker import Picker
+from renamer.renamer import AnimeRenamer
 
 log = get_logger()
 

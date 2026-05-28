@@ -4,7 +4,7 @@ cache — Per-folder .series_cache.json for resolved series metadata.
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from renamer.config import Provider, get_logger
 
@@ -22,7 +22,7 @@ class SeriesCache:
     def __init__(self, media_dir: Path):
         self._path = media_dir / ".series_cache.json"
 
-    def load(self) -> Optional[dict[str, Any]]:
+    def load(self) -> dict[str, Any] | None:
         """
         Load cached series info.  Returns None if the cache doesn't exist
         or is invalid.
@@ -43,11 +43,11 @@ class SeriesCache:
         self,
         series_name: str,
         provider: Provider,
-        tmdb_series_id: Optional[int] = None,
-        anilist_id: Optional[int] = None,
-        kitsu_id: Optional[int] = None,
-        episode_group_id: Optional[str] = None,
-        episode_start_mode: Optional[str] = None,
+        tmdb_series_id: int | None = None,
+        anilist_id: int | None = None,
+        kitsu_id: int | None = None,
+        episode_group_id: str | None = None,
+        episode_start_mode: str | None = None,
     ) -> None:
         """
         Save resolved series info to the cache file.

@@ -17,20 +17,9 @@ Supports:
 
 __version__ = "5.8.0"
 
-from renamer.config import Config, Provider, get_logger
 from renamer.cache import SeriesCache
+from renamer.config import Config, Provider, get_logger
 from renamer.history import RenameHistory
-from renamer.romaniser import Romaniser, anime_title_case
-from renamer.parsers import EpisodeNumberParser, SpecialParser
-from renamer.renamer import AnimeRenamer, sanitize_name
-from renamer.picker import Picker, pick, MultiPicker, multi_pick
-from renamer.providers.base import (
-    EpisodeGroupInfo,
-    EpisodeInfo,
-    RenameResult,
-    SeriesSearchResult,
-)
-from renamer.providers.registry import ProviderRegistry, get_registry
 from renamer.icons import (
     PosterResult,
     fetch_poster,
@@ -39,6 +28,17 @@ from renamer.icons import (
     set_folder_icon,
     set_folder_icon_batch,
 )
+from renamer.parsers import EpisodeNumberParser, SpecialParser
+from renamer.picker import MultiPicker, Picker, multi_pick, pick
+from renamer.providers.base import (
+    EpisodeGroupInfo,
+    EpisodeInfo,
+    RenameResult,
+    SeriesSearchResult,
+)
+from renamer.providers.registry import ProviderRegistry, get_registry
+from renamer.renamer import AnimeRenamer, sanitize_name
+from renamer.romaniser import Romaniser, anime_title_case
 
 __all__ = [
     "__version__",

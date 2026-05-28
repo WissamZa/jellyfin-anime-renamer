@@ -4,14 +4,12 @@ providers.tmdb — TMDBFetcher, TMDBSearch, and Episode Groups support.
 
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 from renamer.config import Config, get_logger
 from renamer.providers.base import (
     EpisodeFetcher,
     EpisodeGroupInfo,
     EpisodeInfo,
-    SeriesSearchResult,
 )
 from renamer.romaniser import get_romaniser
 
@@ -31,7 +29,7 @@ class TMDBSearch:
         # Use a throwaway fetcher just for its _get helper
         self._fetcher = _TMDBGetHelper()
 
-    def find(self, name: str) -> Optional[tuple[int, str]]:
+    def find(self, name: str) -> tuple[int, str] | None:
         """
         Returns (tmdb_id, romaji_name) for the top search result.
 
@@ -70,7 +68,7 @@ class TMDBSearch:
         log.info("Final series name: '%s' (TMDB id=%d)", romaji, tmdb_id)
         return tmdb_id, romaji
 
-    def _fetch_japanese_name(self, series_id: int) -> Optional[str]:
+    def _fetch_japanese_name(self, series_id: int) -> str | None:
         data = self._fetcher._get(
             f"{self.BASE}/tv/{series_id}",
             {**self._params, "language": "ja"},
@@ -84,7 +82,7 @@ class _TMDBGetHelper(EpisodeFetcher):
     """Minimal fetcher subclass just to get _get() for TMDBSearch."""
     name = "TMDBSearchHelper"
 
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         return None
 
     def fetch_specials(self) -> dict[int, EpisodeInfo]:
@@ -101,7 +99,7 @@ class TMDBFetcher(EpisodeFetcher):
         self,
         api_key: str,
         series_id: int,
-        cfg: Optional[Config] = None,
+        cfg: Config | None = None,
     ):
         super().__init__()
         self._key = api_key
@@ -241,7 +239,7 @@ class TMDBFetcher(EpisodeFetcher):
 
     def fetch_episode_group_details(
         self, group_id: str,
-    ) -> Optional[dict[int, EpisodeInfo]]:
+    ) -> dict[int, EpisodeInfo] | None:
         """
         Fetch the full episode group details and build an episode map.
 
@@ -308,12 +306,7 @@ class TMDBFetcher(EpisodeFetcher):
                 else:
                     # Check 3: extract season number from group name
                     sm = re.search(r"(\d+)", gname)
-                    if sm:
-                        season_num = int(sm.group(1))
-                    else:
-                        # Last resort: use the group's order field + 1
-                        # (order is 0-based position, not season number)
-                        season_num = (group.get("order", 0) or 0) + 1
+                    season_num = int(sm.group(1)) if sm else (group.get("order", 0) or 0) + 1
 
             log.info(
                 "  Group '%s' (season %d%s): %d episodes",
@@ -420,7 +413,7 @@ class TMDBFetcher(EpisodeFetcher):
         return ja_titles
 
     # ── Main fetch ──────────────────────────────────────────
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         """
         Fetch episode data.  If an episode group ID is configured,
         use that instead of the default season structure.
@@ -443,7 +436,7 @@ class TMDBFetcher(EpisodeFetcher):
         # Default: fetch by season
         return self._fetch_by_season()
 
-    def _fetch_by_season(self) -> Optional[dict[int, EpisodeInfo]]:
+    def _fetch_by_season(self) -> dict[int, EpisodeInfo] | None:
         """Fetch episodes using the default TMDB season structure."""
         log.info("TMDB — fetching series id=%s …", self._series_id)
         show = self._get(

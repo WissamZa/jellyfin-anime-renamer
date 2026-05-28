@@ -23,15 +23,18 @@ the anime folder so it travels with the folder and stays self-contained.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import requests
 
 from renamer.config import Config, get_logger
-from renamer.icons.fetcher import PosterResult, fetch_poster
+from renamer.icons.fetcher import fetch_poster
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 log = get_logger()
 
@@ -44,7 +47,7 @@ _DIRECTORY_FILENAME = ".directory"
 def set_folder_icon(
     folder: Path,
     cfg: Config,
-    poster_url: Optional[str] = None,
+    poster_url: str | None = None,
 ) -> bool:
     """
     Set a custom folder icon for *folder* by downloading a poster image
@@ -167,10 +170,8 @@ def _download_image(url: str, dest: Path) -> bool:
             os.rename(tmp_path, str(dest))
         except Exception:
             # Clean up temp file on error
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp_path)
-            except OSError:
-                pass
             raise
 
         log.info("Saved poster to: %s", dest)

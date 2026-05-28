@@ -14,7 +14,7 @@ Design notes
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from renamer.config import Config, Provider, get_logger
 from renamer.providers.base import EpisodeFetcher, SeriesSearchResult
@@ -23,7 +23,7 @@ log = get_logger()
 
 # Type alias for a factory callable
 FetcherFactory = Callable[[Config], EpisodeFetcher]
-SearchFactory = Callable[[str, Config], Optional[SeriesSearchResult]]
+SearchFactory = Callable[[str, Config], SeriesSearchResult | None]
 
 
 class ProviderRegistry:
@@ -48,7 +48,7 @@ class ProviderRegistry:
         self,
         provider: Provider,
         fetcher_factory: FetcherFactory,
-        search_factory: Optional[SearchFactory] = None,
+        search_factory: SearchFactory | None = None,
     ) -> None:
         """Register a fetcher factory (and optional search factory)."""
         self._fetchers[provider] = fetcher_factory
@@ -86,7 +86,7 @@ class ProviderRegistry:
         provider: Provider,
         name: str,
         cfg: Config,
-    ) -> Optional[SeriesSearchResult]:
+    ) -> SeriesSearchResult | None:
         """Search for a series by name using the provider's search factory."""
         factory = self._searchers.get(provider)
         if factory is None:
@@ -111,7 +111,7 @@ def _tmdb_factory(cfg: Config) -> EpisodeFetcher:
     return TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
 
 
-def _tmdb_search(name: str, cfg: Config) -> Optional[SeriesSearchResult]:
+def _tmdb_search(name: str, cfg: Config) -> SeriesSearchResult | None:
     from renamer.providers.tmdb import TMDBSearch
 
     result = TMDBSearch(cfg.tmdb_api_key).find(name)
@@ -138,7 +138,7 @@ def _kitsu_factory(cfg: Config) -> EpisodeFetcher:
     return KitsuFetcher(cfg.kitsu_id, cfg)
 
 
-def _kitsu_search(name: str, cfg: Config) -> Optional[SeriesSearchResult]:
+def _kitsu_search(name: str, cfg: Config) -> SeriesSearchResult | None:
     from renamer.providers.kitsu import KitsuFetcher
 
     result = KitsuFetcher(None, cfg).find_series(name)
@@ -157,7 +157,7 @@ def _kitsu_search(name: str, cfg: Config) -> Optional[SeriesSearchResult]:
 # Global singleton
 # ---------------------------------------------------------------------------
 
-_global_registry: Optional[ProviderRegistry] = None
+_global_registry: ProviderRegistry | None = None
 
 
 def get_registry() -> ProviderRegistry:
