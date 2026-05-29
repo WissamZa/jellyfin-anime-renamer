@@ -68,6 +68,77 @@ class TMDBSearch:
         log.info("Final series name: '%s' (TMDB id=%d)", romaji, tmdb_id)
         return tmdb_id, romaji
 
+    def search_multi(
+        self, name: str, limit: int = 10,
+    ) -> list[dict]:
+        """
+        Search TMDB for *name* and return up to *limit* results.
+
+        Each result is a dict with keys:
+          - ``id``: TMDB series ID
+          - ``name``: English name on TMDB
+          - ``original_name``: Original language name
+          - ``ja_name``: Japanese name (fetched separately, may be empty)
+          - ``romaji``: Best romaji name (AniList cross-ref > pykakasi > English)
+          - ``overview``: Short description
+          - ``first_air_date``: First air date
+          - ``origin_country``: List of origin country codes
+
+        This is used by the interactive picker when the auto-search
+        needs user disambiguation.
+        """
+        data = self._fetcher._get(
+            f"{self.BASE}/search/tv",
+            {**self._params, "query": name, "language": "en-US"},
+        )
+        if not data:
+            return []
+
+        raw_results = data.get("results", [])
+        if not raw_results:
+            log.warning("TMDB multi-search for '%s' returned no results.", name)
+            return []
+
+        romaniser = get_romaniser()
+        enriched: list[dict] = []
+
+        for item in raw_results[:limit]:
+            tmdb_id = item.get("id")
+            if not tmdb_id:
+                continue
+            en_name = item.get("name", "")
+            orig_name = item.get("original_name", "")
+
+            # Fetch Japanese name (best-effort, don't fail on error)
+            ja_name = self._fetch_japanese_name(tmdb_id) or orig_name or en_name
+            tmdb_romaji = romaniser.to_romaji(ja_name) if ja_name else en_name
+
+            # Cross-reference with AniList for best romaji
+            best_romaji = tmdb_romaji
+            try:
+                from renamer.providers.romaji_resolver import RomajiResolver
+                resolver = RomajiResolver()
+                best_romaji = resolver.resolve(
+                    search_name=en_name or orig_name,
+                    tmdb_romaji=tmdb_romaji,
+                    english_name=en_name,
+                )
+            except Exception as exc:
+                log.debug("RomajiResolver failed for id=%d: %s", tmdb_id, exc)
+
+            enriched.append({
+                "id": tmdb_id,
+                "name": en_name,
+                "original_name": orig_name,
+                "ja_name": ja_name,
+                "romaji": best_romaji,
+                "overview": (item.get("overview") or "")[:200],
+                "first_air_date": item.get("first_air_date", ""),
+                "origin_country": item.get("origin_country", []),
+            })
+
+        return enriched
+
     def _fetch_japanese_name(self, series_id: int) -> str | None:
         data = self._fetcher._get(
             f"{self.BASE}/tv/{series_id}",
@@ -306,6 +377,7 @@ class TMDBFetcher(EpisodeFetcher):
                 else:
                     # Check 3: extract season number from group name
                     sm = re.search(r"(\d+)", gname)
+                    # Use season number from name, or group order+1 as last resort
                     season_num = int(sm.group(1)) if sm else (group.get("order", 0) or 0) + 1
 
             log.info(

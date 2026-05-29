@@ -4,12 +4,10 @@ renamer.cli.menus
 Interactive selection menus and configuration prompts for Jellyfin Anime Renamer.
 """
 
-import contextlib
-from pathlib import Path
-from typing import TYPE_CHECKING
+from __future__ import annotations
 
-if TYPE_CHECKING:
-    from renamer.cli.multi_series import DiscoveredSeries
+import contextlib
+from typing import TYPE_CHECKING
 
 from renamer.cache import SeriesCache
 from renamer.config import (
@@ -26,8 +24,13 @@ from renamer.icons import (
 )
 from renamer.picker import Picker
 from renamer.providers.base import EpisodeGroupInfo
-from renamer.renamer import AnimeRenamer
 from renamer.romaniser import get_romaniser
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from renamer.cli.multi_series import DiscoveredSeries
+    from renamer.renamer import AnimeRenamer
 
 log = get_logger()
 
@@ -46,6 +49,7 @@ def _save_cache(cfg: Config) -> None:
 
 
 def show_config(cfg: Config) -> None:
+    from renamer import __version__
     org = "Yes" if cfg.organize_into_folders else "No"
     abs_num = "Yes" if cfg.absolute_numbering else "No"
     ep_mode = (
@@ -54,6 +58,7 @@ def show_config(cfg: Config) -> None:
     )
     eg = cfg.episode_group_id or "(none)"
     print(f"""
+  Version         : v{__version__}
   Series          : {cfg.series_name}
   Provider        : {cfg.provider.value}
   TMDB ID         : {cfg.tmdb_series_id}
@@ -61,6 +66,7 @@ def show_config(cfg: Config) -> None:
   Kitsu ID        : {cfg.kitsu_id}
   Episode Group   : {eg}
   Media dir       : {cfg.media_dir}
+  Base DL path    : {cfg.base_download_path or '(not set — uses env BASE_DOWNLOAD_PATH)'}
   Template        : {cfg.name_template}
   Special template: {cfg.special_template}
   Organise folders: {org}
@@ -69,6 +75,7 @@ def show_config(cfg: Config) -> None:
   Season folder   : {cfg.season_folder_template.format(season=1)}  (example)
   Specials folder : {cfg.specials_folder_name}
   Extensions      : {', '.join(cfg.video_extensions)}
+  Subtitle exts   : {', '.join(cfg.subtitle_extensions)}
   History         : {cfg.history_file}
   Log file        : renamer.log""")
 
@@ -152,9 +159,12 @@ def select_episode_group(cfg: Config, renamer: AnimeRenamer) -> None:
         return
 
     if not cfg.tmdb_series_id:
-        print("\n  TMDB series ID is not set. Use manual configuration to set it, or")
-        print("  run a dry-run first (auto-search will find it).")
-        return
+        print("\n  TMDB series ID is not set. Searching TMDB …")
+        renamer._auto_search_series()
+        if not cfg.tmdb_series_id:
+            print("  Could not find the series on TMDB.")
+            print("  Try setting the title or ID manually (option 2 in the menu).")
+            return
 
     current_eg = cfg.episode_group_id
     if current_eg:
@@ -315,7 +325,8 @@ def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
     """
     Interactive series title selection.
 
-    Fetches all available titles from:
+    If the TMDB series ID is not set, first runs an auto-search to find
+    and set it.  Then fetches all available titles from:
       1. TMDB Alternative Titles + Translations + main name
       2. AniList romaji / english / native
       3. pykakasi romanisation of the Japanese TMDB title
@@ -328,9 +339,16 @@ def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
         print(f"  Current provider: {cfg.provider.value}")
         return
 
+    # If TMDB ID is not set, search for it first
     if not cfg.tmdb_series_id:
-        print("\n  TMDB series ID is not set. Run a dry-run first.")
-        return
+        print("\n  TMDB series ID is not set. Searching TMDB …")
+        renamer._auto_search_series()
+        if not cfg.tmdb_series_id:
+            print("  Could not find the series on TMDB.")
+            print("  Try setting the title or ID manually (option 2 in the menu).")
+            return
+        print(f"  Found: {cfg.series_name} (TMDB ID: {cfg.tmdb_series_id})")
+        _save_cache(cfg)
 
     print(f"\n  Current title: {cfg.series_name}")
     print("  Fetching available titles from TMDB + AniList …")
@@ -494,6 +512,182 @@ def select_episode_start_mode(cfg: Config) -> None:
             "  Switched to per-season mode.\n"
             "  Each season starts at E01."
         )
+
+
+# ---------------------------------------------------------------------------
+# Navigate / Change Folder
+# ---------------------------------------------------------------------------
+
+def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
+    """
+    Interactive folder navigation — change the working directory (media_dir)
+    to a subfolder within BASE_DOWNLOAD_PATH.
+
+    Security: the user can only navigate to folders that are inside
+    BASE_DOWNLOAD_PATH.  Going above BASE_DOWNLOAD_PATH or to any
+    path outside it is blocked.
+
+    The user can also go UP (to parent) as long as the parent is still
+    within BASE_DOWNLOAD_PATH.
+
+    Updates both cfg and the renamer's internal state so that subsequent
+    operations work on the new folder.
+    """
+    from pathlib import Path
+
+    base_path = cfg.base_download_path
+    if base_path is None:
+        import os
+        raw = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
+        base_path = Path(raw).resolve() if raw else cfg.media_dir.resolve().parent
+
+    if not base_path.exists():
+        print(f"\n  BASE_DOWNLOAD_PATH does not exist: {base_path}")
+        print("  Set BASE_DOWNLOAD_PATH in your .env file or use the qBit hook config menu.")
+        return
+
+    current = cfg.media_dir.resolve()
+
+    # Verify current is within base_path; if not, start at base_path
+    try:
+        current.relative_to(base_path)
+    except ValueError:
+        current = base_path
+
+    while True:
+        print(f"\n  Current folder: {current}")
+        print(f"  Base path:      {base_path}")
+        print()
+
+        # List subdirectories of current folder
+        try:
+            entries = sorted(current.iterdir())
+        except PermissionError:
+            print("  Permission denied — cannot list this directory.")
+            current = current.parent
+            continue
+
+        subdirs = [e for e in entries if e.is_dir() and not e.name.startswith(".")]
+
+        # Build picker options
+        options: list[tuple[str, object]] = []
+
+        # Option to go UP (if not already at base_path)
+        if current != base_path:
+            options.append((f"  .. (go up to {current.parent.name})", current.parent))
+
+        # Option to stay in current folder and use it
+        # Only check for videos directly in this folder (not deep rglob)
+        # so that the selected folder is used exclusively
+        video_exts = set(cfg.video_extensions)
+        has_video = any(
+            f.suffix.lower() in video_exts
+            for f in current.iterdir()
+            if f.is_file()
+        ) if any(e.is_file() for e in entries) else False
+
+        stay_marker = "  [contains video files]" if has_video else ""
+        options.append((f"  Use this folder: {current.name}{stay_marker}", "use_current"))
+
+        # List subdirectories
+        for d in subdirs:
+            # Check if it has video files directly inside (shallow check only)
+            has_vid = any(
+                f.suffix.lower() in video_exts
+                for f in d.iterdir()
+                if f.is_file()
+            )
+            # Also check one level deep (Season sub-folders)
+            if not has_vid:
+                has_vid = any(
+                    f.suffix.lower() in video_exts
+                    for sub in d.iterdir()
+                    if sub.is_dir() and not sub.name.startswith(".")
+                    for f in sub.iterdir()
+                    if f.is_file()
+                )
+            marker = "  [video]" if has_vid else ""
+            options.append((f"  {d.name}{marker}", d))
+
+        # Back to main menu
+        options.append(("<-- Back to main menu", "back"))
+
+        result = Picker(
+            options,
+            title=f"NAVIGATE  (restricted to {base_path})",
+            default_index=0,
+        ).run()
+
+        if result is None or result[1] == "back":
+            return
+
+        selected = result[1]
+
+        if selected == "use_current":
+            # "Use this folder" was selected — update cfg.media_dir
+            break
+
+        if isinstance(selected, Path) and selected == current.parent:
+            # Go up — already validated that current != base_path
+            current = current.parent
+            continue
+
+        if isinstance(selected, Path):
+            # Navigate into the selected subdirectory
+            selected_resolved = selected.resolve()
+
+            # Security check: must be within base_path
+            try:
+                selected_resolved.relative_to(base_path)
+            except ValueError:
+                print(f"\n  ACCESS DENIED: {selected_resolved} is outside BASE_DOWNLOAD_PATH.")
+                print(f"  You can only navigate within: {base_path}")
+                continue
+
+            current = selected_resolved
+            continue
+
+    # Update the config and renamer to use the new folder
+    old_dir = cfg.media_dir
+    cfg.media_dir = current
+    print("\n  Working directory changed:")
+    print(f"    {old_dir}")
+    print(f"    -> {current}")
+
+    # Reset series identity for the new folder
+    from renamer.renamer import _clean_folder_name
+    cfg.series_name = _clean_folder_name(current.name)
+    cfg.tmdb_series_id = None
+    cfg.anilist_id = None
+    cfg.kitsu_id = None
+    cfg.episode_group_id = None
+
+    # Update the renamer's internal state to match the new folder
+    renamer._cfg = cfg
+    from renamer.history import RenameHistory
+    renamer._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
+
+    # Try to load cache for the new folder
+    from renamer.cache import SeriesCache
+    cache = SeriesCache(current)
+    cached = cache.load()
+    if cached:
+        if cached.get("tmdb_series_id"):
+            cfg.tmdb_series_id = cached["tmdb_series_id"]
+        if cached.get("anilist_id"):
+            cfg.anilist_id = cached["anilist_id"]
+        if cached.get("kitsu_id"):
+            cfg.kitsu_id = cached["kitsu_id"]
+        if cached.get("series_name"):
+            cfg.series_name = cached["series_name"]
+        if cached.get("episode_group_id"):
+            cfg.episode_group_id = cached["episode_group_id"]
+        if isinstance(cached.get("provider"), str):
+            cfg.provider = Provider.from_str(cached["provider"])
+        print(f"  Loaded cache: {cfg.series_name} (TMDB ID: {cfg.tmdb_series_id})")
+    else:
+        print(f"  Series name from folder: {cfg.series_name}")
+        print("  No cache found — auto-search will run on next rename.")
 
 
 def _set_env_value(key: str, value: str) -> None:
@@ -840,7 +1034,7 @@ def batch_set_icons(cfg: Config) -> None:
     media_dir = cfg.media_dir
     print(f"\n  Scanning for series in: {media_dir}")
 
-    folders = scan_series_folders(media_dir)
+    folders = scan_series_folders(media_dir, cfg=cfg)
     if not folders:
         print("  No anime series folders found.")
         return
@@ -946,7 +1140,7 @@ def batch_remove_icons(cfg: Config) -> None:
     from renamer.picker import MultiPicker
 
     media_dir = cfg.media_dir
-    folders = scan_series_folders(media_dir)
+    folders = scan_series_folders(media_dir, cfg=cfg)
 
     # Only show folders that have icons
     with_icons = [f for f in folders if has_folder_icon(f)]
@@ -982,7 +1176,7 @@ def batch_remove_icons(cfg: Config) -> None:
 
 
 def _make_series_config_for_icon(
-    series: "DiscoveredSeries",
+    series: DiscoveredSeries,
     base_cfg: Config,
 ) -> Config:
     """Create a Config scoped to a series for icon fetching purposes.

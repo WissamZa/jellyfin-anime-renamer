@@ -29,15 +29,14 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+import json  # noqa: E402
+
 from renamer import AnimeRenamer, Config, Provider  # noqa: E402
 from renamer.config import get_logger  # noqa: E402
 from renamer.icons import set_folder_icon  # noqa: E402
 from renamer.providers.registry import get_registry  # noqa: E402
 
 log = get_logger("qbit_hook")
-
-# Load global & series configuration from JSON
-import json  # noqa: E402
 
 
 def load_hook_config() -> dict:
@@ -286,8 +285,11 @@ def build_qbit_renamer(
         new_path: Path,
         new_name: str,
     ) -> None:
+        # Use cfg.media_dir instead of the captured series_folder
+        # because the folder may have been renamed by the renamer
+        _base = cfg.media_dir if cfg.media_dir.exists() else series_folder
         old_rel_str = _qbit_path_for(old_path.name)
-        new_rel = new_path.relative_to(series_folder)
+        new_rel = new_path.relative_to(_base)
         new_rel_str = str(new_rel)
 
         log.info("qBit renameFile: %s -> %s", old_rel_str, new_rel_str)
@@ -302,7 +304,21 @@ def build_qbit_renamer(
         time.sleep(0.5)
         _refresh_tracked()
 
-    return AnimeRenamer(cfg, rename_via_qbit=rename_via_qbit)
+    def rename_folder_via_qbit(old_path: Path, new_path: Path) -> None:
+        """Rename the series folder via qBit set_location so seeding continues."""
+        log.info("qBit setLocation: %s -> %s", old_path, new_path)
+        ok = qbit.set_location(torrent_hash, str(new_path))
+        if not ok:
+            raise RuntimeError(
+                f"qBit setLocation failed: {old_path} -> {new_path}"
+            )
+        time.sleep(2)
+
+    return AnimeRenamer(
+        cfg,
+        rename_via_qbit=rename_via_qbit,
+        rename_folder_via_qbit=rename_folder_via_qbit,
+    )
 
 
 # ══════════════════════════ MAIN ═════════════════════════
@@ -411,6 +427,7 @@ def process_torrent(
         anilist_id=anilist_id,
         kitsu_id=kitsu_id,
         media_dir=series_folder,
+        base_download_path=BASE_DOWNLOAD_PATH,
         organize_into_folders=True,
         provider=provider,
         episode_group_id=ep_group_id,
@@ -432,10 +449,12 @@ def process_torrent(
 
     # 8. Set folder icon from provider poster
     try:
-        if set_folder_icon(series_folder, cfg):
-            log.info("Folder icon set for: %s", series_folder)
+        # Update series_folder in case it was renamed by the renamer
+        actual_folder = cfg.media_dir if cfg.media_dir.exists() else series_folder
+        if set_folder_icon(actual_folder, cfg):
+            log.info("Folder icon set for: %s", actual_folder)
         else:
-            log.info("No folder icon available for: %s", series_folder)
+            log.info("No folder icon available for: %s", actual_folder)
     except Exception as exc:
         log.warning("Folder icon setting failed (non-fatal): %s", exc)
 

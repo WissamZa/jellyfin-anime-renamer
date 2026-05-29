@@ -15,7 +15,7 @@ Supports:
     - Folder icons from provider posters (Dolphin / Nautilus / Thunar)
 """
 
-__version__ = "5.8.0"
+__version__ = "1.8.0"
 
 from renamer.cache import SeriesCache
 from renamer.config import Config, Provider, get_logger
@@ -37,8 +37,19 @@ from renamer.providers.base import (
     SeriesSearchResult,
 )
 from renamer.providers.registry import ProviderRegistry, get_registry
-from renamer.renamer import AnimeRenamer, sanitize_name
+from renamer.renamer import (
+    AnimeRenamer,
+    _clean_folder_name,
+    _extract_alt_title_from_folder,
+    _extract_name_from_files,
+    sanitize_name,
+)
 from renamer.romaniser import Romaniser, anime_title_case
+from renamer.subtitles import (
+    find_matching_subtitles,
+    process_subtitles_for_video,
+    rename_subtitle,
+)
 
 __all__ = [
     "__version__",
@@ -49,6 +60,9 @@ __all__ = [
     # Core
     "AnimeRenamer",
     "sanitize_name",
+    "_clean_folder_name",
+    "_extract_alt_title_from_folder",
+    "_extract_name_from_files",
     # Storage
     "SeriesCache",
     "RenameHistory",
@@ -77,4 +91,8 @@ __all__ = [
     "remove_folder_icon",
     "set_folder_icon",
     "set_folder_icon_batch",
+    # Subtitles
+    "find_matching_subtitles",
+    "process_subtitles_for_video",
+    "rename_subtitle",
 ]

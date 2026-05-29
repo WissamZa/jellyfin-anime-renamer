@@ -127,8 +127,7 @@ class KitsuFetcher(EpisodeFetcher):
         """Extract the first sequel ID from included data or relationships."""
         # Check included entries for sequels
         included = data.get("included", [])
-        for item in included:
-            item.get("relationships", {})
+        for _item in included:
             # If this is a sequel relationship entry, check if it links forward
             pass
 

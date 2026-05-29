@@ -11,9 +11,13 @@ calls for the same series don't hit the API again.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from renamer.config import Config, Provider, get_logger
-from renamer.providers.base import EpisodeFetcher, EpisodeInfo
+from renamer.providers.base import EpisodeFetcher
+
+if TYPE_CHECKING:
+    from renamer.providers.base import EpisodeInfo
 
 log = get_logger()
 

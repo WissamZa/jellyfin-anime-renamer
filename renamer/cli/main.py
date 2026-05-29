@@ -12,7 +12,7 @@ from renamer.cache import SeriesCache
 
 # CLI submodules
 from renamer.cli import menus
-from renamer.cli.multi_series import run_multi_series_menu
+from renamer.cli.multi_series import run_multi_series_menu, run_rename_folders_menu
 from renamer.cli.scanner import scan_library_to_db
 from renamer.config import Config, Provider, get_logger
 from renamer.picker import Picker
@@ -33,6 +33,8 @@ def _main_menu_options() -> list[tuple[str, str]]:
         ("[Run] Dry Run  (preview only)", "dry_run"),
         ("[Run] Live Rename + Organise", "live_run"),
         ("[Scan] Scan folder — pick & rename multiple series  -->", "multi_series"),
+        ("[Folders] Rename folder names using TMDB  -->", "rename_folders"),
+        ("[Navigate] Change to a subfolder  -->", "navigate"),
         ("[Configure] Provider & Series Identity  -->", "submenu_identity"),
         ("[Utilities] Library Tools  -->", "submenu_utilities"),
         ("[Info] Show current configuration", "show_config"),
@@ -232,6 +234,10 @@ def main() -> None:
                 print("  Cancelled.")
         elif choice == "multi_series":
             run_multi_series_menu(cfg)
+        elif choice == "rename_folders":
+            run_rename_folders_menu(cfg)
+        elif choice == "navigate":
+            menus.navigate_to_folder(cfg, renamer)
         elif choice == "submenu_identity":
             run_identity_submenu(cfg, renamer)
         elif choice == "submenu_utilities":

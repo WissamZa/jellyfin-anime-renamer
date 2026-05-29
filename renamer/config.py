@@ -139,6 +139,7 @@ class Config:
 
     # ── Paths ────────────────────────────────────────────────
     media_dir: Path = field(default_factory=lambda: Path("."))
+    base_download_path: Path | None = None
 
     # ── Behaviour toggles ────────────────────────────────────
     provider: Provider = Provider.TMDB
@@ -154,7 +155,10 @@ class Config:
 
     # ── File handling ────────────────────────────────────────
     video_extensions: Sequence[str] = field(
-        default_factory=lambda: (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm", ".ass", ".srt")
+        default_factory=lambda: (".mp4", ".mkv", ".avi", ".m4v", ".flv", ".webm")
+    )
+    subtitle_extensions: Sequence[str] = field(
+        default_factory=lambda: (".srt", ".ass", ".ssa", ".sub", ".vtt")
     )
 
     # ── HTTP ─────────────────────────────────────────────────
@@ -166,7 +170,7 @@ class Config:
     def __post_init__(self) -> None:
         """Coerce types and guard against None values that slip through."""
         # provider=None happens when CLI passes no --provider flag
-        if getattr(self, "provider", None) is None:
+        if self.provider is None:  # type: ignore
             self.provider = Provider.TMDB
         # media_dir might arrive as a plain string from some callers
         if not isinstance(self.media_dir, Path):
@@ -176,6 +180,11 @@ class Config:
     @property
     def history_file(self) -> Path:
         return self.media_dir / "rename_history.json"
+
+    @property
+    def all_media_extensions(self) -> tuple[str, ...]:
+        """Combined video + subtitle extensions for scanning purposes."""
+        return tuple(self.video_extensions) + tuple(self.subtitle_extensions)
 
     # ── Factory ─────────────────────────────────────────────
 
@@ -208,6 +217,16 @@ class Config:
         provider_raw = _str("PROVIDER")
         start_mode_raw = _str("EPISODE_START_MODE", START_MODE_PER_SEASON)
 
+        # Parse subtitle extensions from env (comma-separated, e.g. ".srt,.ass,.ssa")
+        _subtitle_ext_raw = _str("SUBTITLE_EXTENSIONS")
+        subtitle_exts = None
+        if _subtitle_ext_raw:
+            subtitle_exts = tuple(
+                ext.strip() if ext.strip().startswith(".") else f".{ext.strip()}"
+                for ext in _subtitle_ext_raw.split(",")
+                if ext.strip()
+            )
+
         env_values: dict = dict(
             tmdb_api_key=_str("TMDB_API_KEY"),
             series_name=_str("SERIES_NAME"),
@@ -216,6 +235,7 @@ class Config:
             kitsu_id=_int("KITSU_ID"),
             episode_group_id=_str("EPISODE_GROUP_ID") or None,
             media_dir=Path(_str("MEDIA_DIR") or "."),
+            base_download_path=Path(_str("BASE_DOWNLOAD_PATH")) if _str("BASE_DOWNLOAD_PATH") else None,
             organize_into_folders=_bool("ORGANIZE_INTO_FOLDERS", True),
             absolute_numbering=_bool("ABSOLUTE_NUMBERING", False),
             provider=Provider.from_str(provider_raw) if provider_raw else Provider.TMDB,
@@ -224,6 +244,8 @@ class Config:
                 else START_MODE_PER_SEASON
             ),
         )
+        if subtitle_exts is not None:
+            env_values["subtitle_extensions"] = subtitle_exts
         env_values.update(overrides)
         return cls(**env_values)
 

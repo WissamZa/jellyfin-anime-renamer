@@ -15,6 +15,9 @@ def scan_library_to_db(cfg: Config) -> None:
     Scan the main media folder for all anime subfolders and build
     a SQLite database with series, seasons, and episode info.
 
+    Scans both video files and subtitle files so that subtitle
+    associations are tracked in the database.
+
     The database is saved alongside the media folder as
     anime_library.db.
     """
@@ -25,15 +28,22 @@ def scan_library_to_db(cfg: Config) -> None:
     print(f"\n  Scanning: {cfg.media_dir}")
     print(f"  Database: {db_path}")
 
-    # Collect all video files recursively
+    # Collect all media files recursively (video + subtitles)
+    media_exts = cfg.all_media_extensions
     files = sorted(
         p for p in cfg.media_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in cfg.video_extensions
+        if p.is_file() and p.suffix.lower() in media_exts
     )
 
-    if not files:
+    # Separate video and subtitle files for different processing
+    video_files = [f for f in files if f.suffix.lower() in cfg.video_extensions]
+    subtitle_files = [f for f in files if f.suffix.lower() in cfg.subtitle_extensions]
+
+    if not video_files:
         print("  No video files found.")
         return
+
+    print(f"  Found {len(video_files)} video(s), {len(subtitle_files)} subtitle(s).")
 
     # Build series info from folder structure
     # Each immediate subfolder of MEDIA_DIR is a series
@@ -76,10 +86,23 @@ def scan_library_to_db(cfg: Config) -> None:
             file_path   TEXT    NOT NULL,
             FOREIGN KEY (season_id) REFERENCES seasons(id)
         );
+        CREATE TABLE IF NOT EXISTS subtitles (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            series_id   INTEGER NOT NULL,
+            season_id   INTEGER,
+            filename    TEXT    NOT NULL,
+            language    TEXT,
+            subtitle_ext TEXT   NOT NULL,
+            file_size   INTEGER,
+            file_path   TEXT    NOT NULL,
+            video_filename TEXT,
+            FOREIGN KEY (series_id) REFERENCES series(id),
+            FOREIGN KEY (season_id) REFERENCES seasons(id)
+        );
     """)
 
-    # Group files by top-level subfolder (series)
-    for f in files:
+    # Group video files by top-level subfolder (series)
+    for f in video_files:
         try:
             rel = f.relative_to(cfg.media_dir)
         except ValueError:
@@ -110,9 +133,9 @@ def scan_library_to_db(cfg: Config) -> None:
                 "path": series_path,
             }
 
-    # Parse each file for season/episode info
+    # Parse each video file for season/episode info
     episode_count = 0
-    for f in files:
+    for f in video_files:
         try:
             rel = f.relative_to(cfg.media_dir)
         except ValueError:
@@ -189,6 +212,66 @@ def scan_library_to_db(cfg: Config) -> None:
         )
         episode_count += 1
 
+    # Scan subtitle files and insert into subtitles table
+    subtitle_count = 0
+    from renamer.subtitles import _split_subtitle_stem
+    for f in subtitle_files:
+        try:
+            rel = f.relative_to(cfg.media_dir)
+        except ValueError:
+            continue
+
+        parts = rel.parts
+        if len(parts) < 1:
+            continue
+
+        series_folder = parts[0]
+        sinfo = series_map.get(series_folder)
+        if not sinfo:
+            continue
+
+        series_id = sinfo["id"]
+
+        # Determine season from path
+        season_id = None
+        if len(parts) >= 2:
+            cur.execute(
+                "SELECT id FROM seasons WHERE series_id = ? AND folder_name = ?",
+                (series_id, parts[1]),
+            )
+            season_row = cur.fetchone()
+            if season_row:
+                season_id = season_row[0]
+
+        # Extract language tag from subtitle stem
+        base_stem, lang_tag = _split_subtitle_stem(f.stem)
+        language = lang_tag.lstrip(".") if lang_tag else None
+
+        # Try to find the matching video filename
+        video_filename = None
+        for vf in video_files:
+            if vf.parent == f.parent and vf.stem == base_stem:
+                video_filename = vf.name
+                break
+
+        file_size = f.stat().st_size if f.exists() else 0
+        cur.execute(
+            """INSERT INTO subtitles
+               (series_id, season_id, filename, language, subtitle_ext, file_size, file_path, video_filename)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                series_id,
+                season_id,
+                f.name,
+                language,
+                f.suffix.lower(),
+                file_size,
+                str(f),
+                video_filename,
+            ),
+        )
+        subtitle_count += 1
+
     conn.commit()
 
     # Print summary
@@ -198,10 +281,13 @@ def scan_library_to_db(cfg: Config) -> None:
     n_seasons = cur.fetchone()[0]
     cur.execute("SELECT COUNT(*) FROM episodes")
     n_episodes = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM subtitles")
+    n_subtitles = cur.fetchone()[0]
 
     conn.close()
 
     print(
         f"\n  Database created: {db_path}\n"
-        f"  Series: {n_series}  |  Seasons: {n_seasons}  |  Episodes: {n_episodes}"
+        f"  Series: {n_series}  |  Seasons: {n_seasons}  |  "
+        f"Episodes: {n_episodes}  |  Subtitles: {n_subtitles}"
     )

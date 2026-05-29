@@ -249,7 +249,6 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
     try:
         from renamer.providers.anilist import AniListFetcher
         from renamer.providers.romaji_resolver import RomajiResolver
-        from renamer.providers.tmdb import TMDBSearch
         from renamer.romaniser import _romaniser
     except ImportError as exc:
         bail(
@@ -257,7 +256,6 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
             "  Make sure the renamer/ package is in the same folder."
         )
 
-    TMDBSearch(env["TMDB_API_KEY"])
 
     # ── TMDB search
     tmdb_data = requests.get(

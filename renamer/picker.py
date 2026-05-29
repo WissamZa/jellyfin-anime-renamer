@@ -158,8 +158,6 @@ class Picker:
 
         try:
             import termios
-            import tty
-            _ = tty  # noqa: F841
         except ImportError:
             return self._fallback()
 
@@ -419,8 +417,6 @@ class MultiPicker:
 
         try:
             import termios
-            import tty
-            _ = tty  # noqa: F841
         except ImportError:
             return self._fallback()
 

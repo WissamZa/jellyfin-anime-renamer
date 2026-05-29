@@ -1,6 +1,6 @@
 [project]
 name = "jellyfin-anime-renamer"
-version = "5.8.0"
+version = "1.8.0"
 description = "Rename & organise anime episodes for Jellyfin. Hooks into qBittorrent for fully automatic post-download processing. Supports folder icons from provider posters."
 readme = "README.md"
 license = { text = "MIT" }

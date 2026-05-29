@@ -9,7 +9,10 @@ All interactive prompts live in ``jellyfin_renamer.py``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+import contextlib
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from renamer.cache import SeriesCache
@@ -23,10 +26,7 @@ from renamer.history import RenameHistory
 from renamer.parsers import EpisodeNumberParser, SpecialParser
 from renamer.providers.base import EpisodeGroupInfo, EpisodeInfo, RenameResult
 from renamer.providers.registry import get_registry
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
+from renamer.subtitles import process_subtitles_for_video
 
 log = get_logger()
 
@@ -50,6 +50,50 @@ _CODEC_BRACKET = re.compile(
 )
 _CODEC_LOOSE = re.compile(r"\b(?:1080p|720p|480p|HEVC|x264|x265|AV1)\b", re.IGNORECASE)
 
+# Pattern to clean folder names into searchable titles
+_FOLDER_GROUP_TAG = re.compile(r"^\[[^\]]+\]\s*")
+_FOLDER_YEAR_TAG = re.compile(r"\s*\(\d{4}\)\s*$")
+_FOLDER_BRACKET_TAG = re.compile(r"\s*\[[^\]]+\]\s*$")
+# Season tag: (Season 01), (Season 1), (S01), etc.
+_FOLDER_SEASON_TAG = re.compile(
+    r"\s*\(\s*Season\s+\d+\s*\)", re.IGNORECASE,
+)
+# English/alternate title in parentheses at the end of the Japanese/romaji name
+# Matches: "Name (English Name Here)" but NOT "Name (2002)" or "Name (Season 01)"
+_FOLDER_ALT_TITLE_PAREN = re.compile(
+    r"\s*\(([^)]+)\)\s*$"
+)
+# Codec/resolution tags inside brackets anywhere in the name
+_FOLDER_CODEC_BRACKET = re.compile(
+    r"\s*\[(?:"
+    r"[^\]]*?(?:1080p|720p|480p|2160p|4K|HEVC|x264|x265|AV1|10bit|8bit|Hi10|"
+    r"WEB|BD|DVD|Multi-Sub|Dual-Audio|Batch|Complete)"
+    r")[^\]]*\]",
+    re.IGNORECASE,
+)
+# Language / source tags inside brackets: [JPN], [ENG], [www], [v2], etc.
+# These are typically short ALL-CAPS or lowercase tags that are NOT the title.
+_FOLDER_LANG_BRACKET = re.compile(
+    r"\s*\[(?:"
+    r"[A-Z]{2,4}"          # 2-4 letter uppercase codes: JPN, ENG, CHS, CHT, RAW
+    r"|www"                # www source tag
+    r"|v\d+"               # version tags: v2, v3
+    r")\s*\]",
+    re.IGNORECASE,
+)
+# Catch-all for remaining trailing bracket tags that are clearly NOT part of
+# the title — short tags, resolution tags, codec fragments.
+_FOLDER_JUNK_BRACKET = re.compile(
+    r"\s*\[(?:"
+    r"\d{3,4}x\d{3,4}"    # resolution: 1920x1080
+    r"|[A-Z]{2,5}"        # short uppercase: JPN, ENG, WWW, AAC, FLAC
+    r"|\d+bit"            # 10bit, 8bit
+    r"|v\d+"              # v2
+    r"|(?:Hi)?10"         # Hi10, 10
+    r")\s*\]",
+    re.IGNORECASE,
+)
+
 
 class AnimeRenamer:
     """
@@ -72,12 +116,14 @@ class AnimeRenamer:
         self,
         cfg: Config,
         rename_via_qbit: Callable[[Path, Path, str], None] | None = None,
+        rename_folder_via_qbit: Callable[[Path, Path], None] | None = None,
     ) -> None:
         self._cfg = cfg
-        self._history = RenameHistory(cfg.history_file)
+        self._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
         self._ep_parser = EpisodeNumberParser()
         self._sp_parser = SpecialParser()
         self._rename_via_qbit = rename_via_qbit
+        self._rename_folder_via_qbit = rename_folder_via_qbit
 
     # ── Public API ────────────────────────────────────────────
 
@@ -88,20 +134,43 @@ class AnimeRenamer:
         Returns a list of :class:`RenameResult` objects (one per video file).
         When *dry_run* is ``True`` no files are modified.
         """
-        errors = self._cfg.validate()
-        if errors:
-            for e in errors:
-                log.error("Config error: %s", e)
-            return []
-
         self._load_cache()
 
+        # ── Resolve series name from folder BEFORE anything else ──
+        # This ensures a clean title is available for LocalFetcher fallback
+        # even when no provider API key or series ID is configured.
         if not self._cfg.series_name:
-            self._cfg.series_name = self._cfg.media_dir.resolve().name
+            self._cfg.series_name = _clean_folder_name(
+                self._cfg.media_dir.resolve().name
+            )
+        else:
+            # Even if series_name was set (e.g. from env), clean it if it
+            # looks like a raw folder name with sub-group tags etc.
+            cleaned = _clean_folder_name(self._cfg.series_name)
+            if cleaned != self._cfg.series_name:
+                log.info(
+                    "Cleaned series name: %r -> %r",
+                    self._cfg.series_name, cleaned,
+                )
+                self._cfg.series_name = cleaned
 
+        # ── Validate (non-fatal for missing API key — LocalFetcher fallback) ──
+        errors = self._cfg.validate()
+        fatal_errors = [e for e in errors if not e.startswith("TMDB_API_KEY")]
+        if fatal_errors:
+            for e in fatal_errors:
+                log.error("Config error: %s", e)
+            return []
+        if errors:
+            # Only API-key warnings — can proceed with LocalFetcher
+            for e in errors:
+                log.warning("Config warning: %s (will use local mode)", e)
+
+        # ── Try to resolve via provider APIs ──
         self._auto_search_series()
 
         registry = get_registry()
+        fetcher = None
         try:
             fetcher = registry.create_fetcher(self._cfg.provider, self._cfg)
         except LookupError as exc:
@@ -112,7 +181,17 @@ class AnimeRenamer:
             )
             return []
         except ValueError as exc:
-            log.error("Provider configuration error: %s", exc)
+            log.warning("Provider lookup failed: %s", exc)
+            log.warning(
+                "Falling back to local mode — using folder name %r "
+                "as series title with episode numbers from filenames.",
+                self._cfg.series_name,
+            )
+            from renamer.providers.local import LocalFetcher
+            fetcher = LocalFetcher(self._cfg)
+
+        if fetcher is None:
+            log.error("No provider available — aborting.")
             return []
 
         episode_map = fetcher.fetch()
@@ -140,24 +219,56 @@ class AnimeRenamer:
             print("  Aborted.")
             return
 
+        # Separate folder renames from file renames.
+        # Folder renames must be processed LAST (after files are restored).
+        file_entries: dict[str, str] = {}
+        folder_entries: dict[str, str] = {}
+        for new_path_str, orig_path_str in history.items():
+            new_path = Path(new_path_str)
+            # If the original path is a directory (not a file with extension),
+            # treat it as a folder rename.
+            if not new_path.suffix and not Path(orig_path_str).suffix:
+                folder_entries[new_path_str] = orig_path_str
+            else:
+                file_entries[new_path_str] = orig_path_str
+
         restored, skipped_count, restored_keys = 0, 0, []
-        for rel_new, orig_name in history.items():
-            src = self._cfg.media_dir / rel_new
-            dest = self._cfg.media_dir / orig_name
+
+        # 1. Restore files first
+        for new_path_str, orig_path_str in file_entries.items():
+            src = Path(new_path_str)
+            dest = Path(orig_path_str)
             if src.exists():
                 try:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
                     src.rename(dest)
-                    log.info("Restored: %s -> %s", rel_new, orig_name)
-                    restored_keys.append(rel_new)
+                    log.info("Restored: %s -> %s", src, dest)
+                    restored_keys.append(new_path_str)
                     restored += 1
                 except OSError as exc:
-                    log.error("Could not revert %r: %s", rel_new, exc)
+                    log.error("Could not revert %r: %s", src, exc)
             else:
-                log.warning("Not found (skipped): %s", rel_new)
+                log.warning("Not found (skipped): %s", src)
+                skipped_count += 1
+
+        # 2. Restore folders last (reverse order)
+        for new_path_str, orig_path_str in reversed(list(folder_entries.items())):
+            src = Path(new_path_str)
+            dest = Path(orig_path_str)
+            if src.exists() and src.is_dir():
+                try:
+                    src.rename(dest)
+                    log.info("Restored folder: %s -> %s", src, dest)
+                    restored_keys.append(new_path_str)
+                    restored += 1
+                except OSError as exc:
+                    log.error("Could not revert folder %r: %s", src, exc)
+            elif not src.exists():
+                log.warning("Folder not found (skipped): %s", src)
                 skipped_count += 1
 
         self._history.clear_entries(restored_keys)
-        log.info("Restored %d file(s). Skipped %d.", restored, skipped_count)
+        log.info("Restored %d item(s). Skipped %d.", restored, skipped_count)
 
     def list_episode_groups(self) -> list[EpisodeGroupInfo]:
         """List available TMDB episode groups (TMDB provider only)."""
@@ -205,7 +316,7 @@ class AnimeRenamer:
         elif isinstance(raw_provider, str) and raw_provider:
             cfg.provider = Provider.from_str(raw_provider)
         # Never let provider become None
-        if getattr(cfg, "provider", None) is None:
+        if cfg.provider is None:
             cfg.provider = Provider.TMDB
         if not cfg.episode_group_id and data.get("episode_group_id"):
             cfg.episode_group_id = data["episode_group_id"]
@@ -228,8 +339,22 @@ class AnimeRenamer:
 
     def _auto_search_series(self) -> None:
         """
-        Silently search for a series ID if the active provider needs one but
-        none is set.  Always picks the top result — no user interaction.
+        Search for a series ID if the active provider needs one but
+        none is set.
+
+        Flow:
+          1. Search with the cleaned folder name (romaji part)
+          2. If exactly one result, use it automatically
+          3. If multiple results, show an interactive picker so the
+             user can choose the correct series
+          4. If no results, retry with the English/alternate title
+             from the folder name (if available)
+          5. If still no results, try extracting a name from the
+             files inside the folder
+          6. If all attempts fail, fall back to LocalFetcher
+
+        This ensures that any process needing a TMDB ID searches for
+        it first — no need to run a dry run just to get the ID.
         """
         name = self._cfg.series_name
         if not name:
@@ -238,15 +363,69 @@ class AnimeRenamer:
         registry = get_registry()
         cfg = self._cfg
 
-        if cfg.provider == Provider.TMDB and not cfg.tmdb_series_id and cfg.tmdb_api_key:
-            log.info("Auto-searching TMDB for %r …", name)
-            result = registry.search(Provider.TMDB, name, cfg)
-            if result:
-                cfg.tmdb_series_id = result.series_id
-                cfg.series_name = result.series_name or name
-                log.info("Auto-found: %r (TMDB ID %d)", cfg.series_name, cfg.tmdb_series_id)
-            else:
-                log.warning("TMDB auto-search returned nothing for %r.", name)
+        if cfg.provider == Provider.TMDB and not cfg.tmdb_series_id:
+            if not cfg.tmdb_api_key:
+                log.info(
+                    "No TMDB API key — skipping auto-search. "
+                    "Will use folder name %r as series title.", name,
+                )
+                return
+
+            # Search attempts: list of (query, label) to try in order
+            search_queries = [(name, "cleaned folder name")]
+
+            # Try English/alternate title from folder name as fallback
+            raw_folder = cfg.media_dir.resolve().name
+            alt_title = _extract_alt_title_from_folder(raw_folder)
+            if alt_title and alt_title != name:
+                search_queries.append((alt_title, "English/alternate title"))
+
+            # Try extracting name from files inside the folder
+            file_name = _extract_name_from_files(cfg.media_dir)
+            if file_name and file_name != name and file_name != alt_title:
+                search_queries.append((file_name, "filename extraction"))
+
+            for query, label in search_queries:
+                log.info("Auto-searching TMDB with %s: %r …", label, query)
+                results = registry.search_multi(Provider.TMDB, query, cfg, limit=10)
+
+                if not results:
+                    log.info("No TMDB results for %s: %r", label, query)
+                    continue
+
+                if len(results) == 1:
+                    # Single result — use it automatically
+                    r = results[0]
+                    cfg.tmdb_series_id = r["id"]
+                    cfg.series_name = r.get("romaji") or r.get("name") or name
+                    log.info(
+                        "Auto-found: %r (TMDB ID %d)",
+                        cfg.series_name, cfg.tmdb_series_id,
+                    )
+                    return
+
+                # Multiple results — show interactive picker
+                selected = self._pick_series_from_results(results, query)
+                if selected:
+                    cfg.tmdb_series_id = selected["id"]
+                    cfg.series_name = selected.get("romaji") or selected.get("name") or name
+                    log.info(
+                        "Selected: %r (TMDB ID %d)",
+                        cfg.series_name, cfg.tmdb_series_id,
+                    )
+                    return
+
+                # User cancelled picker — try next query
+                log.info("Picker cancelled for query %r — trying next.", query)
+                continue
+
+            # All queries exhausted — offer interactive search
+            log.warning(
+                "TMDB auto-search found no match for %r "
+                "(also tried alternate title and filename extraction).",
+                name,
+            )
+            self._interactive_search_fallback()
 
         elif cfg.provider == Provider.AniList and not cfg.anilist_id:
             log.info("Auto-searching AniList for %r …", name)
@@ -275,6 +454,60 @@ class AnimeRenamer:
             except Exception as exc:
                 log.warning("Kitsu auto-search failed: %s", exc)
 
+    @staticmethod
+    def _pick_series_from_results(
+        results: list[dict], query: str,
+    ) -> dict | None:
+        """
+        Present an interactive Picker for the user to choose from
+        multiple TMDB search results.
+
+        Returns the selected result dict, or ``None`` if cancelled.
+        """
+        from renamer.picker import Picker
+
+        options: list[tuple[str, dict]] = []
+        for r in results:
+            name = r.get("name", "")
+            romaji = r.get("romaji", "")
+            orig = r.get("original_name", "")
+            year = r.get("first_air_date", "")[:4]
+            overview = r.get("overview", "")
+            country = ", ".join(r.get("origin_country", []))
+
+            # Build a descriptive label
+            parts: list[str] = []
+            if romaji and romaji != name:
+                parts.append(romaji)
+            if name:
+                parts.append(name)
+            if orig and orig != name and orig != romaji:
+                parts.append(f"({orig})")
+            label = " / ".join(parts)
+
+            if year:
+                label += f"  [{year}]"
+            if country:
+                label += f"  [{country}]"
+            if overview:
+                label += f"  — {overview[:80]}{'…' if len(overview) > 80 else ''}"
+
+            options.append((label, r))
+
+        if not options:
+            return None
+
+        result = Picker(
+            options,
+            title=f"MULTIPLE MATCHES FOR: {query}",
+            default_index=0,
+        ).run()
+
+        if result is None:
+            return None
+
+        return result[1]
+
     def _cross_reference_ids(self) -> None:
         """Best-effort: fill in a missing Kitsu ID from AniList data."""
         cfg = self._cfg
@@ -288,6 +521,83 @@ class AnimeRenamer:
             except Exception:
                 pass
 
+    def _interactive_search_fallback(self) -> None:
+        """
+        When all auto-search queries fail, present an interactive
+        menu so the user can manually search TMDB, use local mode,
+        or cancel.
+
+        This is called from ``_auto_search_series`` when no TMDB
+        match is found for any query.
+        """
+        from renamer.picker import Picker
+
+        cfg = self._cfg
+        name = cfg.series_name
+
+        while True:
+            options = [
+                (f"Search TMDB with custom query (current: '{name}')", "search"),
+                (f"Use as-is: '{name}' (local mode — no TMDB episode data)", "local"),
+                ("Cancel (abort rename)", "cancel"),
+            ]
+
+            result = Picker(
+                options,
+                title=f"AUTO-SEARCH FAILED FOR: {name}",
+                default_index=0,
+            ).run()
+
+            if result is None or result[1] == "cancel":
+                return
+
+            action = result[1]
+
+            if action == "local":
+                # Keep using the cleaned folder name, will fall back
+                # to LocalFetcher in run()
+                log.info("Using local mode with folder name %r.", name)
+                return
+
+            if action == "search":
+                custom_query = input(
+                    f"  Enter search query [{name}]: "
+                ).strip()
+                if not custom_query:
+                    custom_query = name
+
+                registry = get_registry()
+                results = registry.search_multi(Provider.TMDB, custom_query, cfg, limit=10)
+
+                if not results:
+                    print(f"  No TMDB results for '{custom_query}'. Try another query.")
+                    continue
+
+                if len(results) == 1:
+                    r = results[0]
+                    cfg.tmdb_series_id = r["id"]
+                    cfg.series_name = r.get("romaji") or r.get("name") or name
+                    log.info(
+                        "Found: %r (TMDB ID %d)",
+                        cfg.series_name, cfg.tmdb_series_id,
+                    )
+                    return
+
+                # Multiple results — show picker
+                selected = self._pick_series_from_results(results, custom_query)
+                if selected:
+                    cfg.tmdb_series_id = selected["id"]
+                    cfg.series_name = selected.get("romaji") or selected.get("name") or name
+                    log.info(
+                        "Selected: %r (TMDB ID %d)",
+                        cfg.series_name, cfg.tmdb_series_id,
+                    )
+                    return
+
+                # User cancelled picker
+                print("  Search cancelled. Try another query or use local mode.")
+                continue
+
     # ── File processing ───────────────────────────────────────
 
     def _process_files(
@@ -300,6 +610,8 @@ class AnimeRenamer:
         files = sorted(p for p in cfg.media_dir.rglob("*") if p.is_file())
         results: list[RenameResult] = []
         session_history: dict[str, str] = {}
+        # Track claimed destination paths to prevent overwriting
+        claimed_dests: set[Path] = set()
 
         mode = "DRY RUN — no files changed" if dry_run else "LIVE"
         log.info("Scanning: %s | %s", cfg.media_dir, mode)
@@ -325,6 +637,7 @@ class AnimeRenamer:
                 next_auto_special=next_auto_special,
                 dry_run=dry_run,
                 session_history=session_history,
+                claimed_dests=claimed_dests,
             )
             results.append(result)
 
@@ -332,11 +645,27 @@ class AnimeRenamer:
         skipped = sum(1 for r in results if r.skipped)
         failed = sum(1 for r in results if r.error)
 
+        # Save file-rename history BEFORE the folder rename,
+        # because the history file path depends on cfg.media_dir
+        # which will change after the folder is renamed.
         if not dry_run and session_history:
             self._history.save(session_history)
 
+        # ── Rename the containing folder to match the series name ──
+        folder_renamed = False
+        if done > 0 or skipped > 0:
+            folder_renamed = self._rename_folder(dry_run, session_history)
+
+        # If folder was renamed, also save the folder-rename to the
+        # history file at the NEW location (so undo works correctly)
+        if folder_renamed and not dry_run:
+            new_history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
+            new_history.save(session_history)
+
         tag = "Would process" if dry_run else "Processed"
         log.info("%s: %d | Skipped: %d | Errors: %d", tag, done, skipped, failed)
+        if folder_renamed:
+            log.info("Folder renamed to: %s", cfg.media_dir.name)
         if not dry_run and session_history:
             log.info("Undo log: %s", cfg.history_file)
 
@@ -352,6 +681,7 @@ class AnimeRenamer:
         next_auto_special: int,
         dry_run: bool,
         session_history: dict[str, str],
+        claimed_dests: set[Path],
     ) -> tuple[RenameResult, int]:
         """
         Classify *path* and return a (RenameResult, next_auto_special) pair.
@@ -374,7 +704,7 @@ class AnimeRenamer:
                 is_special=True,
             )
             return (
-                self._handle_file(path, info, dry_run, season_offsets, session_history),
+                self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                 next_auto_special,
             )
 
@@ -389,7 +719,7 @@ class AnimeRenamer:
                     source="filename", is_special=True,
                 )
                 return (
-                    self._handle_file(path, info, dry_run, season_offsets, session_history),
+                    self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                     next_auto_special,
                 )
 
@@ -408,7 +738,7 @@ class AnimeRenamer:
                     next_auto_special,
                 )
             return (
-                self._handle_file(path, info, dry_run, season_offsets, session_history),
+                self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                 next_auto_special,
             )
 
@@ -432,7 +762,7 @@ class AnimeRenamer:
             )
 
         return (
-            self._handle_file(path, info, dry_run, season_offsets, session_history),
+            self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
             next_auto_special,
         )
 
@@ -443,11 +773,11 @@ class AnimeRenamer:
         dry_run: bool,
         season_offsets: dict[int, int],
         session_history: dict[str, str],
+        claimed_dests: set[Path],
     ) -> RenameResult:
         """Compute the new name, log it, and (in live mode) rename the file."""
         cfg = self._cfg
-        ext = _get_full_suffix(path)
-        new_name = self._format_name(info, ext, season_offsets)
+        new_name = self._format_name(info, path.suffix, season_offsets)
 
         if cfg.organize_into_folders:
             dest_folder = self._season_folder(info.season) if not dry_run else (
@@ -457,14 +787,49 @@ class AnimeRenamer:
                 )
             )
             dest_path = dest_folder / new_name
-            rel_key = str(dest_folder.relative_to(cfg.media_dir) / new_name)
         else:
+            dest_folder = cfg.media_dir
             dest_path = cfg.media_dir / new_name
-            rel_key = new_name
+
+        # Resolve to absolute for consistent comparison and history
+        dest_resolved = dest_path.resolve()
+        src_resolved = path.resolve()
 
         # Already named correctly
-        if path.resolve() == dest_path.resolve():
+        if src_resolved == dest_resolved:
+            # Even if the video is already named correctly, still check for
+            # subtitles that might need to be moved alongside it
+            new_stem = dest_path.stem
+            self._process_subtitles(path, new_stem, dest_folder, dry_run, session_history)
             return RenameResult(path.name, new_name, info, status=RenameResult.Status.SKIPPED)
+
+        # ── Duplicate destination check ──────────────────────
+        # If another file in this session already claimed this destination,
+        # or if a different existing file is already at that path, skip.
+        if dest_resolved in claimed_dests:
+            log.warning(
+                "Duplicate target: %s already claimed — skipping %s",
+                dest_resolved, src_resolved,
+            )
+            return RenameResult(
+                path.name, new_name, info,
+                status=RenameResult.Status.SKIPPED,
+                error=f"Duplicate target name: {new_name}",
+            )
+        # Also check if a different pre-existing file is at the destination
+        if dest_resolved.exists() and dest_resolved != src_resolved:
+            log.warning(
+                "Target already exists: %s — skipping %s",
+                dest_resolved, src_resolved,
+            )
+            return RenameResult(
+                path.name, new_name, info,
+                status=RenameResult.Status.SKIPPED,
+                error=f"Target already exists: {dest_resolved}",
+            )
+
+        # Claim this destination so no other file can take it
+        claimed_dests.add(dest_resolved)
 
         self._log_rename(info, path, dest_path, season_offsets)
 
@@ -486,15 +851,152 @@ class AnimeRenamer:
                     path.rename(dest_path)
 
                 result.status = RenameResult.Status.SUCCESS
-                session_history[rel_key] = path.name
+                # Store full absolute paths so undo always works
+                session_history[str(dest_resolved)] = str(src_resolved)
+
+                # Rename matching subtitles alongside the video
+                new_stem = dest_path.stem
+                self._process_subtitles(path, new_stem, dest_folder, dry_run, session_history)
+
             except Exception as exc:
                 result.error = str(exc)
                 result.status = RenameResult.Status.ERROR
-                log.error("Failed to rename %r: %s", path.name, exc)
+                log.error("Failed to rename %r: %s", path, exc)
         else:
             result.status = RenameResult.Status.SUCCESS
+            # In dry-run, still report what subtitles would be renamed
+            new_stem = dest_path.stem
+            self._process_subtitles(path, new_stem, dest_folder, dry_run, session_history)
 
         return result
+
+    def _process_subtitles(
+        self,
+        original_video_path: Path,
+        new_video_stem: str,
+        dest_dir: Path,
+        dry_run: bool,
+        session_history: dict[str, str],
+    ) -> None:
+        """
+        Find and rename subtitle files matching a renamed video.
+
+        This is a thin wrapper around :func:`process_subtitles_for_video`
+        that also records subtitle renames in the undo history log and
+        adapts the qBit rename callback to the two-argument signature
+        expected by the subtitles module.
+        """
+        cfg = self._cfg
+
+        # Build a rename function compatible with subtitles.rename_subtitle
+        # (which expects old_path, new_path) from the qBit callback
+        # (which expects old_path, new_path, new_name).
+        sub_rename_fn: Callable[[Path, Path], None] | None = None
+        if self._rename_via_qbit and not dry_run:
+            _rename = self._rename_via_qbit
+            def sub_rename_fn_impl(old_path: Path, new_path: Path) -> None:
+                _rename(old_path, new_path, new_path.name)
+            sub_rename_fn = sub_rename_fn_impl
+
+        renamed = process_subtitles_for_video(
+            original_video_path=original_video_path,
+            new_video_stem=new_video_stem,
+            dest_dir=dest_dir,
+            cfg=cfg,
+            dry_run=dry_run,
+            rename_fn=sub_rename_fn,
+        )
+
+        # Record subtitle renames in the undo history (full absolute paths)
+        if not dry_run:
+            for new_sub_path in renamed:
+                with contextlib.suppress(ValueError):
+                    session_history[str(new_sub_path.resolve())] = str(original_video_path.resolve())
+
+    def _rename_folder(
+        self,
+        dry_run: bool,
+        session_history: dict[str, str],
+    ) -> bool:
+        """
+        Rename the containing folder (cfg.media_dir) to match the series name.
+
+        This is called after all file renames are complete.  The folder is
+        renamed to the sanitized series name so that Jellyfin can identify it
+        correctly.
+
+        Security: only renames if the folder is within BASE_DOWNLOAD_PATH
+        (or the parent of media_dir).  The folder is only renamed if the
+        new name differs from the current name.
+
+        Returns True if the folder was (or would be) renamed, False otherwise.
+        """
+        cfg = self._cfg
+        current_dir = cfg.media_dir.resolve()
+        new_folder_name = sanitize_name(cfg.series_name)
+
+        if not new_folder_name:
+            log.debug("Folder rename skipped: series name is empty.")
+            return False
+
+        # Already named correctly
+        if current_dir.name == new_folder_name:
+            return False
+
+        # Security check: only rename if parent is BASE_DOWNLOAD_PATH
+        # or if the folder is a direct child of a reasonable parent
+        parent = current_dir.parent
+        base_download_path = cfg.base_download_path or _get_base_download_path()
+        if base_download_path:
+            try:
+                # Verify the folder is within BASE_DOWNLOAD_PATH
+                current_dir.relative_to(base_download_path)
+            except ValueError:
+                log.warning(
+                    "Folder rename skipped: %s is not within BASE_DOWNLOAD_PATH (%s)",
+                    current_dir, base_download_path,
+                )
+                return False
+
+        new_path = parent / new_folder_name
+
+        # Check if the target folder name already exists
+        if new_path.exists() and new_path != current_dir:
+            log.warning(
+                "Folder rename skipped: target folder already exists: %s",
+                new_path,
+            )
+            return False
+
+        if dry_run:
+            log.info(
+                "FOLDER  |  %s  ->  %s  (dry run)",
+                current_dir.name, new_folder_name,
+            )
+            return True
+
+        try:
+            old_resolved = current_dir
+
+            # If we have a qBit folder-rename callback, use it instead
+            # of os.rename() so that qBit keeps tracking the files.
+            if self._rename_folder_via_qbit:
+                self._rename_folder_via_qbit(old_resolved, new_path)
+            else:
+                current_dir.rename(new_path)
+
+            # Update cfg.media_dir to point to the new path
+            cfg.media_dir = new_path
+            # Record in undo history so the folder can be renamed back
+            session_history[str(new_path.resolve())] = str(old_resolved)
+            log.info(
+                "FOLDER  |  %s  ->  %s",
+                old_resolved.name, new_folder_name,
+            )
+            return True
+        except OSError as exc:
+            log.error("Failed to rename folder: %s", exc)
+            return False
 
     def _log_rename(
         self,
@@ -516,10 +1018,13 @@ class AnimeRenamer:
         else:
             tag = f"S{info.season:02d}E{info.episode:02d}"
 
-        dest_label = (
-            (dest_path.parent.name + "/") if cfg.organize_into_folders else ""
-        ) + dest_path.name
-        log.info("%s  |  %s  ->  %s", tag, path.name, dest_label)
+        # Log FULL paths on both sides so undo can always work reliably.
+        # The source path is the original location (before rename).
+        # The dest path is the new location (after rename).
+        log.info(
+            "%s  |  %s  ->  %s",
+            tag, path.resolve(), dest_path.resolve(),
+        )
 
     # ── Naming helpers ────────────────────────────────────────
 
@@ -589,6 +1094,20 @@ class AnimeRenamer:
 # ---------------------------------------------------------------------------
 
 
+def _get_base_download_path() -> Path | None:
+    """
+    Return the BASE_DOWNLOAD_PATH from the environment, or None if not set.
+
+    Used by the folder-rename and navigate features to enforce security:
+    only folders within this path can be renamed or navigated to.
+    """
+    import os
+    raw = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
+    if raw:
+        return Path(raw).resolve()
+    return None
+
+
 def sanitize_name(name: str) -> str:
     """
     Sanitise a string for use as a filename or folder name.
@@ -614,6 +1133,222 @@ def _clean_special_title(title: str) -> str:
     return cleaned
 
 
+def _clean_folder_name(raw: str) -> str:
+    """
+    Heuristically clean a folder name into a searchable series title.
+
+    Handles complex anime folder names like::
+
+        [Judas] Botsuraku Yotei no Kizoku Dakedo, Hima Datta kara
+        Mahou o Kiwamete Mita (I'm a Noble on the Brink of Ruin, So I
+        Might as Well Try Mastering Magic) (Season 01) [1080p]
+        [HEVC x265 10bit][Multi-Sub]
+
+    Processing order:
+      1. Replace underscores/dots with spaces
+      2. Strip leading sub-group tags: ``[SubGroup] Anime`` → ``Anime``
+      3. Strip season tags: ``(Season 01)`` → removed
+      4. Strip codec/resolution brackets: ``[1080p]``, ``[HEVC x265 10bit]``,
+         ``[Multi-Sub]``, ``[Dual-Audio]``, etc.
+      5. Strip remaining trailing bracket tags
+      6. Strip year in parentheses: ``(2024)``
+      7. If an English/alternate title remains in parentheses *after* the
+         main name, prefer the non-parenthesised (typically romaji) part
+         as the primary search term — but also try the parenthesised
+         (English) part if the romaji yields no results.
+
+    Returns a clean, searchable title string.
+    """
+    name = raw.replace("_", " ").replace(".", " ")
+
+    # 1. Strip leading sub-group tag: [Judas] ...
+    name = _FOLDER_GROUP_TAG.sub("", name)
+
+    # 2. Strip season tags: (Season 01), (Season 1)
+    name = _FOLDER_SEASON_TAG.sub("", name)
+
+    # 3. Strip codec/resolution/quality brackets: [1080p], [HEVC x265 10bit], [Multi-Sub]
+    #    Repeatedly apply because there may be multiple bracket tags
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_CODEC_BRACKET.sub("", name)
+
+    # 4. Strip language/source tags: [JPN], [ENG], [www], [v2]
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_LANG_BRACKET.sub("", name)
+
+    # 5. Strip junk bracket tags: [1920x1080], [AAC], [FLAC], [10bit], [v2]
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_JUNK_BRACKET.sub("", name)
+
+    # 6. Strip remaining trailing bracket tags (catch-all for anything left)
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_BRACKET_TAG.sub("", name)
+
+    # 7. Strip year in parentheses: (2024)
+    name = _FOLDER_YEAR_TAG.sub("", name)
+
+    name = name.strip()
+
+    # 8. If there's a parenthesised English/alternate title at the end,
+    #    keep only the main (romaji/Japanese) part for the primary search.
+    #    Example: "Botsuraku... (I'm a Noble on the Brink of Ruin)"
+    #    → primary: "Botsuraku..."
+    #    The English alternate title is stored separately for fallback search.
+    m = _FOLDER_ALT_TITLE_PAREN.search(name)
+    if m:
+        alt = m.group(1).strip()
+        main = name[:m.start()].strip()
+        # Only strip the parenthesised part if it looks like an English title
+        # (contains mostly ASCII letters and spaces) and isn't a year or season
+        if alt and main and not re.match(r"^\d{4}$", alt):
+            name = main
+
+    return name
+
+
+def _extract_alt_title_from_folder(raw: str) -> str | None:
+    """
+    Extract the English/alternate title from a complex folder name.
+
+    For folder names like::
+
+        [Judas] Romaji Name (English Name) (Season 01) [1080p]
+
+    This returns the ``"English Name"`` part, or ``None`` if no
+    parenthesised alternate title is found.
+
+    Used as a fallback search query when the romaji name yields no
+    results on TMDB.
+    """
+    name = raw.replace("_", " ").replace(".", " ")
+    name = _FOLDER_GROUP_TAG.sub("", name)
+    name = _FOLDER_SEASON_TAG.sub("", name)
+
+    # Strip codec brackets
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_CODEC_BRACKET.sub("", name)
+
+    # Strip language/source tags
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_LANG_BRACKET.sub("", name)
+
+    # Strip junk bracket tags
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_JUNK_BRACKET.sub("", name)
+
+    # Strip remaining trailing bracket tags
+    prev = None
+    while prev != name:
+        prev = name
+        name = _FOLDER_BRACKET_TAG.sub("", name)
+
+    name = _FOLDER_YEAR_TAG.sub("", name)
+    name = name.strip()
+
+    # Look for parenthesised alternate title
+    m = _FOLDER_ALT_TITLE_PAREN.search(name)
+    if m:
+        alt = m.group(1).strip()
+        main = name[:m.start()].strip()
+        if alt and main and not re.match(r"^\d{4}$", alt):
+            return alt
+    return None
+
+
+def _extract_name_from_files(media_dir: Path) -> str | None:
+    """
+    Try to extract a series name from the video files in *media_dir*.
+
+    Looks for common anime filename patterns like::
+
+        [SubGroup] Series Name - 01 [1080p].mkv
+        [SubGroup] Series Name - E01 [1080p].mkv
+
+    Strips the sub-group tag and episode number, returning the
+    common prefix across all video files (if consistent).
+
+    Returns ``None`` if no consistent name can be extracted.
+    """
+    from renamer.parsers import SpecialParser
+
+    sp_parser = SpecialParser()
+    video_exts = {".mkv", ".mp4", ".avi", ".m4v", ".flv", ".webm"}
+
+    files = sorted(
+        p for p in media_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in video_exts
+    )
+
+    if not files:
+        return None
+
+    # Strip episode numbers and sub-group tags from each filename stem
+    # to find the common "series name" prefix
+    _EP_NUM_RE = re.compile(
+        r"\s*[-–]\s*(?:E?P?\d+|S\d+E\d+).*$", re.IGNORECASE,
+    )
+    _SUBGROUP_RE = re.compile(r"^\[[^\]]+\]\s*")
+
+    stems: list[str] = []
+    for f in files:
+        # Skip specials
+        if sp_parser.parse(f.name) is not None:
+            continue
+        stem = f.stem
+        # Strip leading [SubGroup] tag
+        stem = _SUBGROUP_RE.sub("", stem)
+        # Strip episode number suffix
+        stem = _EP_NUM_RE.sub("", stem)
+        # Strip trailing codec/resolution tags
+        stem = _FOLDER_CODEC_BRACKET.sub("", stem)
+        stem = _FOLDER_LANG_BRACKET.sub("", stem)
+        stem = _FOLDER_JUNK_BRACKET.sub("", stem)
+        stem = _FOLDER_BRACKET_TAG.sub("", stem)
+        stem = stem.strip(" .-_")
+        if stem:
+            stems.append(stem)
+
+    if not stems:
+        return None
+
+    # Find the longest common prefix (word-level)
+    # If all stems start with the same words, that's the series name
+    words_list = [s.split() for s in stems]
+    if not words_list:
+        return None
+
+    # Find common prefix words
+    common_words: list[str] = []
+    min_len = min(len(w) for w in words_list)
+    for i in range(min_len):
+        word = words_list[0][i]
+        if all(len(w) > i and w[i] == word for w in words_list):
+            common_words.append(word)
+        else:
+            break
+
+    # Need at least 1 word that's reasonably long to be meaningful
+    if len(common_words) < 1:
+        return None
+
+    result = " ".join(common_words).strip()
+    return result if len(result) >= 3 else None
+
+
 def _compute_display_episode(
     info: EpisodeInfo,
     cfg: Config,
@@ -636,13 +1371,3 @@ def _format_episode_number(n: int) -> str:
     if n >= 100:
         return f"{n:03d}"
     return f"{n:02d}"
-
-
-def _get_full_suffix(path: Path) -> str:
-    """Get file extension, preserving language tags for subtitle files."""
-    name = path.name
-    # Match a language code like .en or .zh-CN followed by subtitle extension
-    m = re.search(r"(\.[a-zA-Z\-]{2,6})\.(srt|ass|vtt)$", name, re.IGNORECASE)
-    if m:
-        return m.group(1) + "." + m.group(2)
-    return path.suffix

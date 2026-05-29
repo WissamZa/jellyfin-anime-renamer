@@ -24,6 +24,8 @@ log = get_logger()
 # Type alias for a factory callable
 FetcherFactory = Callable[[Config], EpisodeFetcher]
 SearchFactory = Callable[[str, Config], SeriesSearchResult | None]
+# Multi-search factory returns a list of result dicts (for interactive picking)
+MultiSearchFactory = Callable[[str, Config, int], list[dict]]
 
 
 class ProviderRegistry:
@@ -41,6 +43,7 @@ class ProviderRegistry:
     def __init__(self) -> None:
         self._fetchers: dict[Provider, FetcherFactory] = {}
         self._searchers: dict[Provider, SearchFactory] = {}
+        self._multi_searchers: dict[Provider, MultiSearchFactory] = {}
 
     # ── Registration ─────────────────────────────────────────
 
@@ -49,11 +52,14 @@ class ProviderRegistry:
         provider: Provider,
         fetcher_factory: FetcherFactory,
         search_factory: SearchFactory | None = None,
+        multi_search_factory: MultiSearchFactory | None = None,
     ) -> None:
-        """Register a fetcher factory (and optional search factory)."""
+        """Register a fetcher factory (and optional search factories)."""
         self._fetchers[provider] = fetcher_factory
         if search_factory is not None:
             self._searchers[provider] = search_factory
+        if multi_search_factory is not None:
+            self._multi_searchers[provider] = multi_search_factory
         log.debug("Registered provider: %s", provider.value)
 
     # ── Fetcher creation ─────────────────────────────────────
@@ -94,6 +100,37 @@ class ProviderRegistry:
             return None
         return factory(name, cfg)
 
+    def search_multi(
+        self,
+        provider: Provider,
+        name: str,
+        cfg: Config,
+        limit: int = 10,
+    ) -> list[dict]:
+        """
+        Search for a series by name and return multiple results.
+
+        Used by the interactive picker when the auto-search needs
+        user disambiguation.  Falls back to the single-result
+        ``search()`` if no multi-search factory is registered.
+        """
+        factory = self._multi_searchers.get(provider)
+        if factory is not None:
+            return factory(name, cfg, limit)
+
+        # Fallback: use the single-result search and wrap it
+        single = self.search(provider, name, cfg)
+        if single:
+            return [{
+                "series_id": single.series_id,
+                "series_name": single.series_name,
+                "provider": single.provider,
+                "tmdb_id": single.tmdb_id,
+                "anilist_id": single.anilist_id,
+                "kitsu_id": single.kitsu_id,
+            }]
+        return []
+
     def registered_providers(self) -> list[Provider]:
         return list(self._fetchers.keys())
 
@@ -107,7 +144,12 @@ def _tmdb_factory(cfg: Config) -> EpisodeFetcher:
     from renamer.providers.tmdb import TMDBFetcher
 
     if not cfg.tmdb_series_id:
-        raise ValueError("TMDB_SERIES_ID is required for the TMDB provider.")
+        raise ValueError(
+            "TMDB_SERIES_ID is required for the TMDB provider. "
+            "The auto-search could not find a match — try setting the series "
+            "name or ID manually (option 2 in the menu, or --title / --tmdb-id "
+            "on the command line)."
+        )
     return TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
 
 
@@ -124,6 +166,12 @@ def _tmdb_search(name: str, cfg: Config) -> SeriesSearchResult | None:
             tmdb_id=tmdb_id,
         )
     return None
+
+
+def _tmdb_multi_search(name: str, cfg: Config, limit: int = 10) -> list[dict]:
+    from renamer.providers.tmdb import TMDBSearch
+
+    return TMDBSearch(cfg.tmdb_api_key).search_multi(name, limit=limit)
 
 
 def _anilist_factory(cfg: Config) -> EpisodeFetcher:
@@ -165,7 +213,9 @@ def get_registry() -> ProviderRegistry:
     global _global_registry
     if _global_registry is None:
         _global_registry = ProviderRegistry()
-        _global_registry.register(Provider.TMDB, _tmdb_factory, _tmdb_search)
+        _global_registry.register(
+            Provider.TMDB, _tmdb_factory, _tmdb_search, _tmdb_multi_search,
+        )
         _global_registry.register(Provider.AniList, _anilist_factory)
         _global_registry.register(Provider.Kitsu, _kitsu_factory, _kitsu_search)
     return _global_registry

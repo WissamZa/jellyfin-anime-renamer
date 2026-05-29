@@ -91,7 +91,7 @@ class Romaniser:
                 "pykakasi not installed — romaji conversion disabled. "
                 "Run: uv add pykakasi"
             )
-            self._kks = None
+            self._kks = None  # type: ignore
             self._available = False
 
     def is_japanese(self, text: str) -> bool:
@@ -103,7 +103,7 @@ class Romaniser:
           - no Japanese characters detected
           - pykakasi is not installed
         """
-        if not self._available or not self.is_japanese(text):
+        if not self._available or self._kks is None or not self.is_japanese(text):
             return text
 
         result = self._kks.convert(text)
