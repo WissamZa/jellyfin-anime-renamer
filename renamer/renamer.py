@@ -9,11 +9,13 @@ All interactive prompts live in ``jellyfin_renamer.py``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import contextlib
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from renamer.cache import SeriesCache
 from renamer.config import (
