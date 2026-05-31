@@ -19,7 +19,7 @@ from renamer.providers.base import EpisodeFetcher
 if TYPE_CHECKING:
     from renamer.providers.base import EpisodeInfo
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

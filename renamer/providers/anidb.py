@@ -51,7 +51,7 @@ from renamer.providers.base import EpisodeFetcher, EpisodeInfo
 if TYPE_CHECKING:
     from pathlib import Path
 
-log = get_logger()
+log = get_logger(__name__)
 
 # AniDB UDP API constants
 ANIDB_HOST = "api.anidb.net"

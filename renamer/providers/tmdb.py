@@ -13,7 +13,7 @@ from renamer.providers.base import (
 )
 from renamer.romaniser import get_romaniser
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 class TMDBSearch:

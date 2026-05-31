@@ -36,7 +36,7 @@ from renamer.icons.fetcher import fetch_poster
 if TYPE_CHECKING:
     from pathlib import Path
 
-log = get_logger()
+log = get_logger(__name__)
 
 # Filename used for the saved poster inside the anime folder
 _ICON_FILENAME = ".folder_icon.png"

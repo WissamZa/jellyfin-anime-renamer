@@ -29,7 +29,7 @@ from renamer.config import get_logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-log = get_logger()
+log = get_logger(__name__)
 
 # eDonkey protocol chunk size (9.28 MB)
 ED2K_CHUNK_SIZE = 9_728_000

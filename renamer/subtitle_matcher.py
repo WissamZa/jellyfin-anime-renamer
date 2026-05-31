@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

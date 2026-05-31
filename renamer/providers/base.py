@@ -29,7 +29,7 @@ from urllib3.util.retry import Retry
 
 from renamer.config import Config, get_logger
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

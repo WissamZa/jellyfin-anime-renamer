@@ -33,7 +33,7 @@ from renamer.providers.base import EpisodeGroupInfo, EpisodeInfo, RenameResult
 from renamer.providers.registry import get_registry
 from renamer.subtitles import process_subtitles_for_video
 
-log = get_logger()
+log = get_logger(__name__)
 
 # Characters illegal in Windows filenames and/or confusing for Jellyfin
 _ILLEGAL_CHARS = re.compile(r'[\\/*?:"<>|;]')

@@ -20,7 +20,7 @@ from renamer.config import Config, Provider, get_logger
 from renamer.picker import Picker
 from renamer.renamer import AnimeRenamer
 
-log = get_logger()
+log = get_logger(__name__)
 
 BANNER = f"""
 +======================================================+

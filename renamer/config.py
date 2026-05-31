@@ -36,43 +36,99 @@ if TYPE_CHECKING:
 _LOG_FILE = Path(__file__).resolve().parent.parent / "renamer.log"
 _LOGGERS_CONFIGURED: set[str] = set()
 
+# ANSI colour codes for terminal output — disabled automatically when stdout
+# is not a TTY (e.g. when piped or redirected).
+_LEVEL_COLOURS: dict[int, str] = {
+    logging.DEBUG:    "\033[90m",   # dark grey
+    logging.INFO:     "\033[0m",    # default
+    logging.WARNING:  "\033[93m",   # yellow
+    logging.ERROR:    "\033[91m",   # red
+    logging.CRITICAL: "\033[97;41m", # white-on-red
+}
+_RESET = "\033[0m"
+
+# File format includes module name for easier log triage
+_FILE_FMT = logging.Formatter(
+    "%(asctime)s  %(levelname)-8s  [%(name)s:%(lineno)d]  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Console format is more compact — no module/line for readability
+_CONSOLE_FMT_PLAIN = logging.Formatter(
+    "%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+
+class _ColouredFormatter(logging.Formatter):
+    """Formatter that prefixes each record with an ANSI colour based on level."""
+
+    _FMT = "%(asctime)s  %(levelname)-8s  %(message)s"
+    _DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+    def format(self, record: logging.LogRecord) -> str:
+        colour = _LEVEL_COLOURS.get(record.levelno, "")
+        msg = super().format(record)
+        return f"{colour}{msg}{_RESET}" if colour else msg
+
+    def __init__(self) -> None:
+        super().__init__(self._FMT, datefmt=self._DATEFMT)
+
 
 def get_logger(name: str = "renamer") -> logging.Logger:
     """
-    Return a logger that writes DEBUG+ to a rotating file and INFO+ to stdout.
+    Return a namespaced logger with two handlers:
 
-    Safe to call multiple times with the same name — handlers are added only
-    once per process.
+    * **Rotating file** — ``renamer.log`` next to the project root.
+      Captures DEBUG and above; includes module name and line number.
+      Rotates at 1 MB, keeps 5 backups.
+    * **Console (stdout)** — INFO and above; ANSI-coloured when the
+      terminal supports it, plain otherwise.
+
+    Safe to call multiple times with the same ``name`` — handlers are
+    added exactly once per process.
+
+    Example::
+
+        log = get_logger(__name__)
+        log.debug("Loaded %d episodes from cache", len(episodes))
+        log.info("Renaming: %s → %s", src, dst)
+        log.warning("Skipping %s — no match found", filename)
+        log.error("Could not write history: %s", exc)
     """
     logger = logging.getLogger(name)
     if name in _LOGGERS_CONFIGURED:
         return logger
 
     logger.setLevel(logging.DEBUG)
-    fmt = logging.Formatter(
-        "%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
 
-    fh = logging.handlers.RotatingFileHandler(
-        _LOG_FILE, maxBytes=1_000_000, backupCount=5, encoding="utf-8"
-    )
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
+    # ── Rotating file handler ─────────────────────────────────────────
+    try:
+        fh = logging.handlers.RotatingFileHandler(
+            _LOG_FILE, maxBytes=1_000_000, backupCount=5, encoding="utf-8"
+        )
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(_FILE_FMT)
+        logger.addHandler(fh)
+    except OSError:
+        # Log file may not be writable in some environments (CI, read-only FS)
+        pass
 
+    # ── Console handler ───────────────────────────────────────────────
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
-
-    logger.addHandler(fh)
+    if sys.stdout.isatty():
+        ch.setFormatter(_ColouredFormatter())
+    else:
+        ch.setFormatter(_CONSOLE_FMT_PLAIN)
     logger.addHandler(ch)
-    logger.propagate = False  # don't double-log through root
 
+    logger.propagate = False  # prevent double-logging through root logger
     _LOGGERS_CONFIGURED.add(name)
     return logger
 
 
-log = get_logger()
+log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Provider enum

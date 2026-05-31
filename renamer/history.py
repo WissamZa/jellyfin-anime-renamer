@@ -19,7 +19,7 @@ from pathlib import Path
 
 from renamer.config import get_logger
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 class RenameHistory:

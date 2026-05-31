@@ -9,7 +9,7 @@ import requests
 from renamer.config import get_logger
 from renamer.providers.base import EpisodeFetcher, EpisodeInfo
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 class AniListFetcher(EpisodeFetcher):

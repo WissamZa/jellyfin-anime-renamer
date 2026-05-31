@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from renamer.cli.multi_series import DiscoveredSeries
     from renamer.renamer import AnimeRenamer
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 def _save_cache(cfg: Config) -> None:

@@ -13,7 +13,7 @@ from __future__ import annotations
 from renamer.config import Config, get_logger
 from renamer.providers.base import EpisodeFetcher, EpisodeInfo
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 class LocalFetcher(EpisodeFetcher):

@@ -61,7 +61,7 @@ from renamer.providers.anidb_cache import AniDBCache, AniDBFileInfo
 from renamer.renamer import sanitize_name
 from renamer.subtitles import find_matching_subtitles, rename_subtitle
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

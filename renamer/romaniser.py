@@ -8,7 +8,7 @@ from pathlib import Path
 
 from renamer.config import get_logger
 
-log = get_logger()
+log = get_logger(__name__)
 
 # ─────────────────── SMART TITLE-CASE ──────────────────
 PARTICLES_FILE = Path(__file__).resolve().parent.parent / "title_case_particles.json"

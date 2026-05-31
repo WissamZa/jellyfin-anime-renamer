@@ -20,7 +20,7 @@ from typing import Any
 
 from renamer.config import get_logger
 
-log = get_logger()
+log = get_logger(__name__)
 
 # Cache entry TTL
 CACHE_STALE_DAYS = 30

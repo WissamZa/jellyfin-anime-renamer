@@ -19,7 +19,7 @@ from collections.abc import Callable
 from renamer.config import Config, Provider, get_logger
 from renamer.providers.base import EpisodeFetcher, SeriesSearchResult
 
-log = get_logger()
+log = get_logger(__name__)
 
 # Type alias for a factory callable
 FetcherFactory = Callable[[Config], EpisodeFetcher]

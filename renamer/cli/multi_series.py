@@ -27,7 +27,7 @@ from renamer.picker import MultiPicker, Picker
 from renamer.providers.registry import get_registry
 from renamer.renamer import AnimeRenamer, sanitize_name
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

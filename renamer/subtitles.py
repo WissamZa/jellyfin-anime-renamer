@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
-log = get_logger()
+log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Language-tag detection

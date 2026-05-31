@@ -11,7 +11,7 @@ from renamer.config import Config, get_logger
 from renamer.providers.base import EpisodeFetcher, EpisodeInfo
 from renamer.romaniser import anime_title_case, get_romaniser
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 class KitsuFetcher(EpisodeFetcher):

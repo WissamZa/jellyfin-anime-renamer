@@ -88,8 +88,12 @@ class TestLiveRename:
             results = renamer._process_files(ep_map, {}, dry_run=False)
 
         assert all(r.success for r in results)
-        # All .mkv files should now have proper names
-        renamed = {p.name for p in media_dir.glob("*.mkv")}
+        # The renamer may also rename the containing folder to the series name.
+        # Resolve the new media_dir location before globbing.
+        actual_dir = cfg.media_dir  # updated by _process_files if folder was renamed
+        if not actual_dir.exists():
+            actual_dir = media_dir.parent / "Test Show"
+        renamed = {p.name for p in actual_dir.rglob("*.mkv")}
         assert "Test Show - S01E01 - First.mkv" in renamed
 
     def test_creates_history_file(self, cfg, media_dir):

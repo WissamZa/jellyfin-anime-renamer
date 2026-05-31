@@ -1,6 +1,6 @@
 [project]
 name = "jellyfin-anime-renamer"
-version = "2.2.0"
+version = "2.2.1"
 description = "Rename & organise anime episodes for Jellyfin. Hooks into qBittorrent for fully automatic post-download processing. Supports folder icons from provider posters."
 readme = "README.md"
 license = { text = "MIT" }
@@ -30,9 +30,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage      = "https://github.com/YOUR_USERNAME/jellyfin-anime-renamer"
-Documentation = "https://github.com/YOUR_USERNAME/jellyfin-anime-renamer#readme"
-Issues        = "https://github.com/YOUR_USERNAME/jellyfin-anime-renamer/issues"
+Homepage      = "https://github.com/WissamZa/jellyfin-anime-renamer"
+Documentation = "https://github.com/WissamZa/jellyfin-anime-renamer#readme"
+Issues        = "https://github.com/WissamZa/jellyfin-anime-renamer/issues"
 
 [project.scripts]
 rename  = "jellyfin_renamer:main"

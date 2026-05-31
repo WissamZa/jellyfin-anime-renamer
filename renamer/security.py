@@ -25,7 +25,7 @@ from renamer.config import get_logger
 if TYPE_CHECKING:
     from pathlib import Path
 
-log = get_logger()
+log = get_logger(__name__)
 
 
 def check_file_permissions(path: Path, description: str = "") -> list[str]:
