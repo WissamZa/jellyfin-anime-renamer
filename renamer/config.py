@@ -85,6 +85,7 @@ class Provider(StrEnum):
     TMDB = "tmdb"
     AniList = "anilist"
     Kitsu = "kitsu"
+    AniDB = "anidb"
 
     @classmethod
     def from_str(cls, value: str) -> Provider:
@@ -130,6 +131,14 @@ class Config:
     # ── API credentials ──────────────────────────────────────
     tmdb_api_key: str = ""
 
+    # ── AniDB credentials ───────────────────────────────────
+    anidb_username: str = ""
+    anidb_password: str = ""
+    anidb_api_key: str = ""
+    anidb_client: str = "jenameramer"
+    anidb_client_ver: int = 1
+    anidb_offline: bool = False
+
     # ── Series identity ──────────────────────────────────────
     series_name: str = ""
     tmdb_series_id: int | None = None
@@ -146,6 +155,9 @@ class Config:
     organize_into_folders: bool = True
     absolute_numbering: bool = False
     episode_start_mode: str = START_MODE_PER_SEASON
+    use_hash: bool = False          # Enable ED2K hash fallback for unidentified files
+    scan_recursive: bool = False    # Scan subfolders recursively
+    scan_depth: int = 3             # Max recursion depth for scanning
 
     # ── Naming templates (rarely need changing) ──────────────
     name_template: str = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
@@ -170,8 +182,8 @@ class Config:
     def __post_init__(self) -> None:
         """Coerce types and guard against None values that slip through."""
         # provider=None happens when CLI passes no --provider flag
-        if self.provider is None:  # type: ignore
-            self.provider = Provider.TMDB
+        if self.provider is None:  # type: ignore[comparison-overlap]
+            self.provider = Provider.TMDB  # type: ignore[assignment]
         # media_dir might arrive as a plain string from some callers
         if not isinstance(self.media_dir, Path):
             self.media_dir = Path(self.media_dir)
@@ -227,6 +239,13 @@ class Config:
                 if ext.strip()
             )
 
+        # Parse scan depth
+        _scan_depth_raw = _str("SCAN_DEPTH", "3")
+        try:
+            scan_depth = int(_scan_depth_raw)
+        except ValueError:
+            scan_depth = 3
+
         env_values: dict = dict(
             tmdb_api_key=_str("TMDB_API_KEY"),
             series_name=_str("SERIES_NAME"),
@@ -243,6 +262,17 @@ class Config:
                 start_mode_raw if start_mode_raw in _VALID_START_MODES
                 else START_MODE_PER_SEASON
             ),
+            # AniDB credentials
+            anidb_username=_str("ANIDB_USERNAME"),
+            anidb_password=_str("ANIDB_PASSWORD"),
+            anidb_api_key=_str("ANIDB_API_KEY"),
+            anidb_client=_str("ANIDB_CLIENT", "jenameramer"),
+            anidb_client_ver=_int("ANIDB_CLIENT_VER") or 1,
+            anidb_offline=_bool("ANIDB_OFFLINE", False),
+            # Hash-based identification
+            use_hash=_bool("USE_HASH", False),
+            scan_recursive=_bool("SCAN_RECURSIVE", False),
+            scan_depth=scan_depth,
         )
         if subtitle_exts is not None:
             env_values["subtitle_extensions"] = subtitle_exts
@@ -256,6 +286,13 @@ class Config:
         errors: list[str] = []
         if self.provider == Provider.TMDB and not self.tmdb_api_key:
             errors.append("TMDB_API_KEY is not set — add it to your .env file.")
+        if self.provider == Provider.AniDB and not self.anidb_username:
+            errors.append(
+                "ANIDB_USERNAME is not set — add it to your .env file "
+                "(required for AniDB provider). Register at anidb.net for a free account."
+            )
+        if self.provider == Provider.AniDB and not self.anidb_password:
+            errors.append("ANIDB_PASSWORD is not set — add it to your .env file.")
         if not self.media_dir.exists():
             errors.append(f"MEDIA_DIR does not exist: {self.media_dir}")
         if self.episode_start_mode not in _VALID_START_MODES:
@@ -278,7 +315,7 @@ def _load_dotenv_once() -> None:
     if _DOTENV_LOADED:
         return
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-untyped]
         load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     except ImportError:
         pass  # python-dotenv not installed — rely on real env vars

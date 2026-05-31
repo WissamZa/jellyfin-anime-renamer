@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from renamer.providers.anidb import AniDBFetcher
+    from renamer.providers.anidb_cache import AniDBFileInfo
+
 from renamer.cache import SeriesCache
 from renamer.config import (
     START_MODE_CONTINUING,
@@ -136,6 +139,25 @@ class AnimeRenamer:
         Returns a list of :class:`RenameResult` objects (one per video file).
         When *dry_run* is ``True`` no files are modified.
         """
+        # ── Safety Check: prevent running directly on root download folder ──
+        if self._cfg.base_download_path and self._cfg.media_dir.resolve() == self._cfg.base_download_path.resolve():
+            log.error(
+                "CRITICAL: MEDIA_DIR is set to your base torrent download path: %s. "
+                "Running the renamer recursively on the root folder will merge all subfolders! Aborting for safety.",
+                self._cfg.media_dir
+            )
+            return []
+
+        # ── Security: check sensitive file permissions ──
+        try:
+            from renamer.security import check_sensitive_files
+            warnings = check_sensitive_files(Path(__file__).resolve().parent.parent)
+            if warnings:
+                for w in warnings:
+                    log.warning("Security: %s", w)
+        except ImportError:
+            pass
+
         self._load_cache()
 
         # ── Resolve series name from folder BEFORE anything else ──
@@ -296,6 +318,32 @@ class AnimeRenamer:
 
     # ── Cache helpers ─────────────────────────────────────────
 
+    # ── Hash-based lookup (AniDB ED2K) ──────────────────────────
+
+    _anidb_fetcher: AniDBFetcher | None = None
+
+    def _lookup_by_hash(self, path: Path) -> AniDBFileInfo | None:
+        """
+        Try to identify a file by its ED2K hash via AniDB.
+
+        This is used as a fallback when filename parsing fails.
+        Only active when cfg.use_hash is True or provider is AniDB.
+        """
+        try:
+            from renamer.providers.anidb import AniDBFetcher
+        except ImportError:
+            log.debug("AniDB provider not available — skipping hash lookup")
+            return None
+
+        if self._anidb_fetcher is None:
+            self._anidb_fetcher = AniDBFetcher(self._cfg)
+
+        try:
+            return self._anidb_fetcher.lookup_single_file(path)
+        except Exception as exc:
+            log.warning("Hash lookup failed for %s: %s", path.name, exc)
+            return None
+
     def _load_cache(self) -> None:
         cache = SeriesCache(self._cfg.media_dir)
         data = cache.load()
@@ -318,8 +366,8 @@ class AnimeRenamer:
         elif isinstance(raw_provider, str) and raw_provider:
             cfg.provider = Provider.from_str(raw_provider)
         # Never let provider become None
-        if cfg.provider is None:
-            cfg.provider = Provider.TMDB
+        if cfg.provider is None:  # type: ignore[comparison-overlap]
+            cfg.provider = Provider.TMDB  # type: ignore[assignment]
         if not cfg.episode_group_id and data.get("episode_group_id"):
             cfg.episode_group_id = data["episode_group_id"]
         if data.get("episode_start_mode"):
@@ -747,6 +795,37 @@ class AnimeRenamer:
         # ── Absolute number fallback ──────────────────────────
         abs_num = self._ep_parser.parse(path.name)
         if abs_num is None:
+            # ── ED2K hash fallback (when --use-hash is enabled) ────
+            if self._cfg.use_hash:
+                hash_info = self._lookup_by_hash(path)
+                if hash_info:
+                    # Cross-reference the hash result with the episode map
+                    hash_ep = hash_info.episode_number
+                    if hash_ep and hash_ep.isdigit():
+                        ep_int = int(hash_ep)
+                        info = episode_map.get(ep_int)
+                        if info:
+                            return (
+                                self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
+                                next_auto_special,
+                            )
+                        # No match in the main episode map — use hash data directly
+                        title = (
+                            hash_info.episode_title_en
+                            or hash_info.episode_title_romaji
+                            or f"Episode {ep_int}"
+                        )
+                        info = EpisodeInfo(
+                            absolute=ep_int,
+                            season=1,
+                            episode=ep_int,
+                            title=title,
+                            source="anidb_hash",
+                        )
+                        return (
+                            self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
+                            next_auto_special,
+                        )
             log.warning("Skipped (unrecognised): %s", path.name)
             return (
                 RenameResult(path.name, "", EpisodeInfo(0, 0, 0, ""),
@@ -756,6 +835,17 @@ class AnimeRenamer:
 
         info = episode_map.get(abs_num)
         if not info:
+            # ── ED2K hash fallback for episode not in map ────────
+            if self._cfg.use_hash:
+                hash_info = self._lookup_by_hash(path)
+                if hash_info and hash_info.episode_number and hash_info.episode_number.isdigit():
+                    ep_int = int(hash_info.episode_number)
+                    hash_info_from_map = episode_map.get(ep_int)
+                    if hash_info_from_map:
+                        return (
+                            self._handle_file(path, hash_info_from_map, dry_run, season_offsets, session_history, claimed_dests),
+                            next_auto_special,
+                        )
             log.warning("Ep %d not in episode map — skipped.", abs_num)
             return (
                 RenameResult(path.name, "", EpisodeInfo(abs_num, 0, 0, ""),
@@ -945,20 +1035,31 @@ class AnimeRenamer:
         if current_dir.name == new_folder_name:
             return False
 
-        # Security check: only rename if parent is BASE_DOWNLOAD_PATH
-        # or if the folder is a direct child of a reasonable parent
+        # Security check: prevent renaming the root BASE_DOWNLOAD_PATH itself.
+        # When the user is inside BASE_DOWNLOAD_PATH, we allow folder renames.
+        # When the user has explicitly chosen a directory outside BASE_DOWNLOAD_PATH
+        # (e.g. via current-dir or custom path navigation), we still allow renames
+        # since the user intentionally chose that location.
         parent = current_dir.parent
         base_download_path = cfg.base_download_path or _get_base_download_path()
         if base_download_path:
             try:
-                # Verify the folder is within BASE_DOWNLOAD_PATH
                 current_dir.relative_to(base_download_path)
+                # Inside BASE_DOWNLOAD_PATH — safe to rename
             except ValueError:
-                log.warning(
-                    "Folder rename skipped: %s is not within BASE_DOWNLOAD_PATH (%s)",
-                    current_dir, base_download_path,
+                # Outside BASE_DOWNLOAD_PATH — still allow rename since the
+                # user explicitly chose this directory (via navigate/cwd/custom).
+                # Only block if the folder IS the base path itself.
+                if current_dir.resolve() == Path(str(base_download_path)).resolve():
+                    log.warning(
+                        "Folder rename skipped: refusing to rename BASE_DOWNLOAD_PATH itself (%s)",
+                        current_dir,
+                    )
+                    return False
+                # Log a note but proceed — the user chose this location
+                log.info(
+                    "Folder is outside BASE_DOWNLOAD_PATH — renaming anyway (user-selected directory)",
                 )
-                return False
 
         new_path = parent / new_folder_name
 

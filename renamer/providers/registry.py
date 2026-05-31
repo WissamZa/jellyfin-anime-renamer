@@ -201,6 +201,12 @@ def _kitsu_search(name: str, cfg: Config) -> SeriesSearchResult | None:
     return None
 
 
+def _anidb_factory(cfg: Config) -> EpisodeFetcher:
+    from renamer.providers.anidb import AniDBFetcher
+
+    return AniDBFetcher(cfg)
+
+
 # ---------------------------------------------------------------------------
 # Global singleton
 # ---------------------------------------------------------------------------
@@ -218,4 +224,5 @@ def get_registry() -> ProviderRegistry:
         )
         _global_registry.register(Provider.AniList, _anilist_factory)
         _global_registry.register(Provider.Kitsu, _kitsu_factory, _kitsu_search)
+        _global_registry.register(Provider.AniDB, _anidb_factory)
     return _global_registry

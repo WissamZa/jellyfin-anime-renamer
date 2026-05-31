@@ -7,6 +7,7 @@ Interactive selection menus and configuration prompts for Jellyfin Anime Renamer
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from renamer.cache import SeriesCache
@@ -27,8 +28,6 @@ from renamer.providers.base import EpisodeGroupInfo
 from renamer.romaniser import get_romaniser
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from renamer.cli.multi_series import DiscoveredSeries
     from renamer.renamer import AnimeRenamer
 
@@ -50,28 +49,44 @@ def _save_cache(cfg: Config) -> None:
 
 def show_config(cfg: Config) -> None:
     from renamer import __version__
+    from renamer.security import mask_api_key
     org = "Yes" if cfg.organize_into_folders else "No"
     abs_num = "Yes" if cfg.absolute_numbering else "No"
+    use_hash = "Yes" if cfg.use_hash else "No"
+    scan_rec = "Yes" if cfg.scan_recursive else "No"
     ep_mode = (
         "Continuing" if cfg.episode_start_mode == START_MODE_CONTINUING
         else "Per-season"
     )
     eg = cfg.episode_group_id or "(none)"
+    # Mask sensitive values
+    tmdb_key_display = mask_api_key(cfg.tmdb_api_key) if cfg.tmdb_api_key else "(not set)"
+    anidb_pass_display = mask_api_key(cfg.anidb_password) if cfg.anidb_password else "(not set)"
+    anidb_api_display = mask_api_key(cfg.anidb_api_key) if cfg.anidb_api_key else "(not set)"
     print(f"""
   Version         : v{__version__}
   Series          : {cfg.series_name}
   Provider        : {cfg.provider.value}
   TMDB ID         : {cfg.tmdb_series_id}
+  TMDB API Key    : {tmdb_key_display}
   AniList ID      : {cfg.anilist_id}
   Kitsu ID        : {cfg.kitsu_id}
+  AniDB User      : {cfg.anidb_username or '(not set)'}
+  AniDB Pass      : {anidb_pass_display}
+  AniDB API Key   : {anidb_api_display}
+  AniDB Offline   : {'Yes' if cfg.anidb_offline else 'No'}
   Episode Group   : {eg}
   Media dir       : {cfg.media_dir}
   Base DL path    : {cfg.base_download_path or '(not set — uses env BASE_DOWNLOAD_PATH)'}
+  Current dir     : {Path.cwd()}
   Template        : {cfg.name_template}
   Special template: {cfg.special_template}
   Organise folders: {org}
   Absolute nums   : {abs_num}
   Episode start   : {ep_mode}
+  Use hash lookup : {use_hash}
+  Scan recursive  : {scan_rec}
+  Scan depth      : {cfg.scan_depth}
   Season folder   : {cfg.season_folder_template.format(season=1)}  (example)
   Specials folder : {cfg.specials_folder_name}
   Extensions      : {', '.join(cfg.video_extensions)}
@@ -86,11 +101,12 @@ def switch_provider(cfg: Config) -> None:
         (f"TMDB  {'(current)' if cfg.provider == Provider.TMDB else ''}", "tmdb"),
         (f"AniList  {'(current)' if cfg.provider == Provider.AniList else ''}", "anilist"),
         (f"Kitsu  {'(current)' if cfg.provider == Provider.Kitsu else ''}", "kitsu"),
+        (f"AniDB (hash-based)  {'(current)' if cfg.provider == Provider.AniDB else ''}", "anidb"),
     ]
     result = Picker(
         providers,
         title="Switch provider",
-        default_index=[Provider.TMDB, Provider.AniList, Provider.Kitsu].index(cfg.provider),
+        default_index=[Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB].index(cfg.provider) if cfg.provider in [Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB] else 0,
     ).run()
     if result:
         cfg.provider = Provider.from_str(result[1])
@@ -515,26 +531,261 @@ def select_episode_start_mode(cfg: Config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Select Folder & Edit Series ID
+# ---------------------------------------------------------------------------
+
+def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
+    """
+    Let the user select a folder and edit/re-search its series ID.
+
+    Options:
+      1. Use current MEDIA_DIR
+      2. Use current working directory
+      3. Enter a custom path
+      4. Browse subfolders of MEDIA_DIR
+
+    Once a folder is selected, the user can:
+      - See current series ID status
+      - Search TMDB/AniList/Kitsu for the correct series
+      - Manually set the ID
+    """
+
+    # Ask which folder to work on
+    dir_options = [
+        (f"Current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
+        (f"Current working directory: {Path.cwd()}", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("Browse subfolders of MEDIA_DIR", "browse"),
+        ("<-- Back", "back"),
+    ]
+
+    result = Picker(
+        dir_options,
+        title="SELECT FOLDER TO EDIT SERIES ID",
+        default_index=0,
+    ).run()
+
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    target_dir: Path | None = None
+
+    if choice == "media_dir":
+        target_dir = cfg.media_dir
+    elif choice == "cwd":
+        target_dir = Path.cwd()
+        print(f"\n  Selected: {target_dir}")
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if not custom:
+            print("  Cancelled.")
+            return
+        target_dir = Path(custom).resolve()
+        if not target_dir.is_dir():
+            print(f"  Directory does not exist: {target_dir}")
+            return
+    elif choice == "browse":
+        # List subfolders of MEDIA_DIR
+        video_exts = set(cfg.video_extensions)
+        subdirs = sorted(
+            d for d in cfg.media_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
+        if not subdirs:
+            print("  No subfolders found in MEDIA_DIR.")
+            return
+
+        browse_options = []
+        for d in subdirs:
+            # Check for video files
+            has_vid = any(
+                f.suffix.lower() in video_exts
+                for f in d.iterdir()
+                if f.is_file()
+            )
+            # Also check one level deep
+            if not has_vid:
+                has_vid = any(
+                    f.suffix.lower() in video_exts
+                    for sub in d.iterdir()
+                    if sub.is_dir() and not sub.name.startswith(".")
+                    for f in sub.iterdir()
+                    if f.is_file()
+                )
+            marker = "  [video]" if has_vid else ""
+            browse_options.append((f"{d.name}{marker}", d))
+        browse_options.append(("<-- Back", "back"))
+
+        browse_result = Picker(
+            browse_options,
+            title="SELECT A SUBFOLDER",
+            default_index=0,
+        ).run()
+
+        if browse_result is None or browse_result[1] == "back":
+            return
+        target_dir = browse_result[1]
+
+    if target_dir is None:
+        return
+
+    print(f"\n  Selected folder: {target_dir}")
+
+    # Load any existing cache for this folder
+    cache = SeriesCache(target_dir)
+    cached = cache.load()
+
+    # Temporarily switch cfg to this folder's context
+
+    # Apply the target folder's data
+    from renamer.renamer import _clean_folder_name
+    cfg.media_dir = target_dir
+    cfg.series_name = _clean_folder_name(target_dir.name)
+    cfg.tmdb_series_id = None
+    cfg.anilist_id = None
+    cfg.kitsu_id = None
+
+    if cached:
+        if cached.get("series_name"):
+            cfg.series_name = cached["series_name"]
+        if cached.get("tmdb_series_id") or cached.get("tmdb_id"):
+            cfg.tmdb_series_id = cached.get("tmdb_series_id") or cached.get("tmdb_id")
+        if cached.get("anilist_id"):
+            cfg.anilist_id = cached["anilist_id"]
+        if cached.get("kitsu_id"):
+            cfg.kitsu_id = cached["kitsu_id"]
+        if isinstance(cached.get("provider"), str):
+            cfg.provider = Provider.from_str(cached["provider"])
+
+    # Show current status
+    print(f"  Series name: {cfg.series_name}")
+    print(f"  TMDB ID:     {cfg.tmdb_series_id or '(not set)'}")
+    print(f"  AniList ID:  {cfg.anilist_id or '(not set)'}")
+    print(f"  Kitsu ID:    {cfg.kitsu_id or '(not set)'}")
+
+    # Update renamer state
+    from renamer.history import RenameHistory
+    renamer._cfg = cfg
+    renamer._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
+
+    # Offer editing options
+    while True:
+        # Show current IDs in labels
+        edit_labeled = [
+            (f"Search provider for the correct series  (current: {cfg.series_name})", "search"),
+            (f"Set title / provider ID manually  (TMDB:{cfg.tmdb_series_id or '?'} AL:{cfg.anilist_id or '?'})", "manual"),
+            ("Select series title from TMDB alt titles + AniList", "select_title"),
+            ("Reset all IDs for this folder", "reset"),
+            ("<-- Done (return to menu)", "done"),
+        ]
+
+        edit_result = Picker(
+            edit_labeled,
+            title=f"EDIT SERIES ID: {target_dir.name}",
+            default_index=0,
+        ).run()
+
+        if edit_result is None or edit_result[1] == "done":
+            break
+
+        action = edit_result[1]
+        if action == "search":
+            # Reset IDs so auto-search runs fresh
+            cfg.tmdb_series_id = None
+            cfg.anilist_id = None
+            cfg.kitsu_id = None
+            renamer._auto_search_series()
+            print(f"\n  Updated: {cfg.series_name}")
+            print(f"  TMDB ID: {cfg.tmdb_series_id or '(not found)'}")
+            _save_cache(cfg)
+        elif action == "manual":
+            set_manual_info(cfg)
+        elif action == "select_title":
+            select_series_title(cfg, renamer)
+        elif action == "reset":
+            cfg.tmdb_series_id = None
+            cfg.anilist_id = None
+            cfg.kitsu_id = None
+            cfg.series_name = _clean_folder_name(target_dir.name)
+            cfg.episode_group_id = None
+            print(f"  All IDs reset. Series name: {cfg.series_name}")
+            _save_cache(cfg)
+
+    # Note: We keep cfg pointing to the selected folder — the user
+    # may want to run a rename on it next. If they want to go back
+    # to the original, they can use Navigate.
+
+
+# ---------------------------------------------------------------------------
 # Navigate / Change Folder
 # ---------------------------------------------------------------------------
 
 def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
     """
-    Interactive folder navigation — change the working directory (media_dir)
-    to a subfolder within BASE_DOWNLOAD_PATH.
+    Interactive folder navigation — change the working directory (media_dir).
+
+    Options:
+      1. Navigate within BASE_DOWNLOAD_PATH (existing behaviour)
+      2. Use current working directory (with confirmation)
+      3. Enter a custom path
 
     Security: the user can only navigate to folders that are inside
-    BASE_DOWNLOAD_PATH.  Going above BASE_DOWNLOAD_PATH or to any
-    path outside it is blocked.
-
-    The user can also go UP (to parent) as long as the parent is still
-    within BASE_DOWNLOAD_PATH.
+    BASE_DOWNLOAD_PATH (option 1). Options 2 and 3 require explicit
+    confirmation before proceeding.
 
     Updates both cfg and the renamer's internal state so that subsequent
     operations work on the new folder.
     """
     from pathlib import Path
 
+    # First, ask how the user wants to select a directory
+    nav_options = [
+        ("Navigate within BASE_DOWNLOAD_PATH", "base_nav"),
+        (f"Use current working directory: {Path.cwd()}", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("<-- Back to main menu", "back"),
+    ]
+
+    nav_result = Picker(
+        nav_options,
+        title="NAVIGATE: SELECT DIRECTORY METHOD",
+        default_index=0,
+    ).run()
+
+    if nav_result is None or nav_result[1] == "back":
+        return
+
+    nav_choice = nav_result[1]
+
+    if nav_choice == "cwd":
+        cwd = Path.cwd()
+        print(f"\n  Current working directory: {cwd}")
+        confirm = input("  Use this as media directory? (Y/n): ").strip().lower()
+        if confirm in ("n", "no"):
+            print("  Cancelled.")
+            return
+        _apply_new_media_dir(cfg, renamer, cwd)
+        return
+
+    if nav_choice == "custom":
+        custom_path = input("  Enter directory path: ").strip()
+        if not custom_path:
+            print("  Cancelled.")
+            return
+        custom = Path(custom_path).resolve()
+        if not custom.is_dir():
+            print(f"  Directory does not exist: {custom}")
+            return
+        print(f"\n  Selected directory: {custom}")
+        confirm = input("  Use this as media directory? (Y/n): ").strip().lower()
+        if confirm in ("n", "no"):
+            print("  Cancelled.")
+            return
+        _apply_new_media_dir(cfg, renamer, custom)
+        return
+
+    # nav_choice == "base_nav" — existing navigation within BASE_DOWNLOAD_PATH
     base_path = cfg.base_download_path
     if base_path is None:
         import os
@@ -647,16 +898,20 @@ def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
             current = selected_resolved
             continue
 
-    # Update the config and renamer to use the new folder
+    _apply_new_media_dir(cfg, renamer, current)
+
+
+def _apply_new_media_dir(cfg: Config, renamer: AnimeRenamer, new_dir: Path) -> None:
+    """Apply a new media directory to the config and renamer."""
     old_dir = cfg.media_dir
-    cfg.media_dir = current
+    cfg.media_dir = new_dir
     print("\n  Working directory changed:")
     print(f"    {old_dir}")
-    print(f"    -> {current}")
+    print(f"    -> {new_dir}")
 
     # Reset series identity for the new folder
     from renamer.renamer import _clean_folder_name
-    cfg.series_name = _clean_folder_name(current.name)
+    cfg.series_name = _clean_folder_name(new_dir.name)
     cfg.tmdb_series_id = None
     cfg.anilist_id = None
     cfg.kitsu_id = None
@@ -668,8 +923,7 @@ def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
     renamer._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
 
     # Try to load cache for the new folder
-    from renamer.cache import SeriesCache
-    cache = SeriesCache(current)
+    cache = SeriesCache(new_dir)
     cached = cache.load()
     if cached:
         if cached.get("tmdb_series_id"):

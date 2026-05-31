@@ -604,13 +604,19 @@ def run_multi_series_menu(base_cfg: Config) -> None:
     media_dir = base_cfg.media_dir
 
     # Check if media_dir itself contains video files — treat it as the
-    # series folder directly rather than scanning for subfolders
+    # series folder directly rather than scanning for subfolders.
+    # Safety check: Never treat the root BASE_DOWNLOAD_PATH as a series folder
+    # even if it contains loose video files (to avoid merging all torrent subfolders).
     video_exts = set(base_cfg.video_extensions)
+    is_root_download = (
+        base_cfg.base_download_path
+        and media_dir.resolve() == base_cfg.base_download_path.resolve()
+    )
     has_vid_directly = any(
         f.suffix.lower() in video_exts
         for f in media_dir.iterdir()
         if f.is_file()
-    ) if media_dir.is_dir() else False
+    ) if media_dir.is_dir() and not is_root_download else False
 
     if has_vid_directly:
         # The current folder IS the series folder — process it directly
@@ -793,32 +799,69 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
         Botsuraku Yotei no Kizoku Dakedo, Hima Datta kara Mahou o Kiwamete Mita
 
     Flow:
-      1. Scan MEDIA_DIR (or BASE_DOWNLOAD_PATH) for anime subfolders.
-      2. Auto-identify each series using TMDB / the active provider.
-      3. Compute the new folder name from the resolved series title.
-      4. Present a MultiPicker showing: old_name -> new_name.
-      5. Rename the selected folders (with security check against BASE_DOWNLOAD_PATH).
+      1. Let user choose which directory to scan (MEDIA_DIR, CWD, custom path, etc.)
+      2. Scan for anime subfolders.
+      3. Auto-identify each series using TMDB / the active provider.
+      4. Compute the new folder name from the resolved series title.
+      5. Present a MultiPicker showing: old_name -> new_name.
+      6. Rename the selected folders.
     """
     import os
 
     media_dir = base_cfg.media_dir
 
-    # Use BASE_DOWNLOAD_PATH as the scan root if it's set and media_dir
-    # isn't already a subfolder with video files.
-    scan_dir = media_dir
+    # ── Let user choose which directory to scan ──
     base_download_path = base_cfg.base_download_path
     if base_download_path is None:
         raw = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
         if raw:
             base_download_path = Path(raw).resolve()
+
+    dir_options = [
+        (f"Use current MEDIA_DIR: {media_dir}", "media_dir"),
+        ("Use current working directory (where you ran the command)", "cwd"),
+    ]
     if base_download_path and base_download_path.is_dir():
-        try:
-            media_dir.relative_to(base_download_path)
-        except ValueError:
-            scan_dir = base_download_path
-        else:
-            scan_dir = media_dir
-    # If media_dir itself contains video files, scan its parent instead
+        dir_options.append((f"Use BASE_DOWNLOAD_PATH: {base_download_path}", "base_dl"))
+    dir_options.append(("Enter a custom path", "custom"))
+    dir_options.append(("<-- Back to main menu", "back"))
+
+    dir_result = Picker(
+        dir_options,
+        title="RENAME FOLDERS: SELECT DIRECTORY TO SCAN",
+        default_index=0,
+    ).run()
+
+    if dir_result is None or dir_result[1] == "back":
+        return
+
+    dir_choice = dir_result[1]
+    scan_dir: Path | None = None
+
+    if dir_choice == "media_dir":
+        scan_dir = media_dir
+    elif dir_choice == "cwd":
+        scan_dir = Path.cwd()
+        print(f"\n  Current directory: {scan_dir}")
+        if input("  Confirm this directory? (Y/n): ").strip().lower() in ("n", "no"):
+            print("  Cancelled.")
+            return
+    elif dir_choice == "base_dl":
+        scan_dir = base_download_path
+    elif dir_choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if not custom:
+            print("  Cancelled.")
+            return
+        scan_dir = Path(custom).resolve()
+        if not scan_dir.is_dir():
+            print(f"  Directory does not exist: {scan_dir}")
+            return
+
+    if scan_dir is None:
+        return
+
+    # If scan_dir itself contains video files, scan its parent instead
     video_exts = set(base_cfg.video_extensions)
     has_vid_directly = any(
         f.suffix.lower() in video_exts
@@ -826,16 +869,8 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
         if f.is_file()
     )
     if has_vid_directly:
-        # media_dir is itself an anime folder — scan its parent
-        parent = scan_dir.parent
-        if base_download_path:
-            try:
-                parent.relative_to(base_download_path)
-                scan_dir = parent
-            except ValueError:
-                pass  # stay at media_dir
-        else:
-            scan_dir = parent
+        # scan_dir is itself an anime folder — scan its parent
+        scan_dir = scan_dir.parent
 
     print(f"\n  Scanning for series folders in: {scan_dir}")
     folders = scan_series_folders(scan_dir, cfg=base_cfg)
@@ -977,18 +1012,30 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
 
         new_path = folder.parent / new_name
 
-        # Security check
+        # Security check: prevent renaming the root BASE_DOWNLOAD_PATH itself.
+        # When the user has explicitly chosen a directory outside BASE_DOWNLOAD_PATH
+        # (e.g. via current-dir, custom path, or hash-organize), we still allow
+        # renames since the user intentionally chose that location.
         if base_download_path:
             try:
                 folder.relative_to(base_download_path)
+                # Inside BASE_DOWNLOAD_PATH — safe to rename
             except ValueError:
-                log.warning(
-                    "Folder rename skipped: %s is not within BASE_DOWNLOAD_PATH (%s)",
-                    folder, base_download_path,
+                # Outside BASE_DOWNLOAD_PATH — only block if the folder IS
+                # the base path itself (renaming root download dir is dangerous).
+                if folder.resolve() == base_download_path.resolve():
+                    log.warning(
+                        "Folder rename skipped: refusing to rename BASE_DOWNLOAD_PATH itself (%s)",
+                        folder,
+                    )
+                    print(f"  [{i}/{len(selected)}] {folder.name}  — SKIPPED (is BASE_DOWNLOAD_PATH root)")
+                    total_skipped += 1
+                    continue
+                # Log a note but proceed — the user chose this location
+                log.info(
+                    "Folder is outside BASE_DOWNLOAD_PATH — renaming anyway (user-selected directory): %s",
+                    folder,
                 )
-                print(f"  [{i}/{len(selected)}] {folder.name}  — SKIPPED (outside BASE_DOWNLOAD_PATH)")
-                total_skipped += 1
-                continue
 
         # Check target doesn't already exist
         if new_path.exists() and new_path != folder:

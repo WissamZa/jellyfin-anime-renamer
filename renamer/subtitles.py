@@ -214,6 +214,14 @@ def rename_subtitle(
     if dry_run:
         return new_path
 
+    # Prevent overwriting pre-existing files at the destination
+    if new_path.exists() and new_path.resolve() != sub_path.resolve():
+        log.warning(
+            "Subtitle target already exists: %s — skipping %s",
+            new_path, sub_path,
+        )
+        return None
+
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
         if rename_fn:

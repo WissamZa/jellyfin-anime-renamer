@@ -15,10 +15,11 @@ Supports:
     - Folder icons from provider posters (Dolphin / Nautilus / Thunar)
 """
 
-__version__ = "1.8.0"
+__version__ = "2.2.0"
 
 from renamer.cache import SeriesCache
 from renamer.config import Config, Provider, get_logger
+from renamer.hash_organizer import HashOrganizer, OrganizePlan, OrganizeResult
 from renamer.history import RenameHistory
 from renamer.icons import (
     PosterResult,
@@ -45,6 +46,13 @@ from renamer.renamer import (
     sanitize_name,
 )
 from renamer.romaniser import Romaniser, anime_title_case
+from renamer.subtitle_matcher import (
+    SubtitleMatch,
+    SubtitleScanResult,
+    execute_subtitle_renames,
+    preview_subtitle_renames,
+    scan_subtitle_matches,
+)
 from renamer.subtitles import (
     find_matching_subtitles,
     process_subtitles_for_video,
@@ -95,4 +103,14 @@ __all__ = [
     "find_matching_subtitles",
     "process_subtitles_for_video",
     "rename_subtitle",
+    # Hash Organizer
+    "HashOrganizer",
+    "OrganizePlan",
+    "OrganizeResult",
+    # Subtitle Matcher
+    "SubtitleMatch",
+    "SubtitleScanResult",
+    "execute_subtitle_renames",
+    "preview_subtitle_renames",
+    "scan_subtitle_matches",
 ]

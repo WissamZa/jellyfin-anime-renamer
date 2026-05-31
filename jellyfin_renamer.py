@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run
+# PYTHON_ARGCOMPLETE_OK
 """
 jellyfin_renamer.py — Interactive CLI for Jellyfin Anime Renamer.
 

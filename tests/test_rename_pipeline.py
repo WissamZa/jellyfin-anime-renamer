@@ -6,6 +6,7 @@ Uses a temp directory with fake video files — no network calls.
 """
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -42,6 +43,7 @@ def cfg(media_dir):
         series_name="Test Show",
         tmdb_series_id=999,
         media_dir=media_dir,
+        base_download_path=Path("/some/other/path"),
         organize_into_folders=False,
     )
 
@@ -112,6 +114,7 @@ class TestOrganiseIntoFolders:
             tmdb_api_key="fake",
             series_name="Test Show",
             media_dir=tmp_path,
+            base_download_path=Path("/some/other/path"),
             organize_into_folders=True,
         )
         ep_map = _make_episode_map("First")
