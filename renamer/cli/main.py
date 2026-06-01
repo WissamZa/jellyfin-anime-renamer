@@ -91,6 +91,7 @@ def _main_menu_options() -> list[tuple[str, str]]:
         ("[Scan] Scan folder — pick & rename multiple series  -->", "multi_series"),
         ("[Folders] Rename folder names using TMDB  -->", "rename_folders"),
         ("[Navigate] Change to a subfolder  -->", "navigate"),
+        ("[Backup] Anime Database  -->", "submenu_backup"),
         ("[Configure] Provider & Series Identity  -->", "submenu_identity"),
         ("[Utilities] Library Tools  -->", "submenu_utilities"),
         ("[Info] Show current configuration", "show_config"),
@@ -806,6 +807,8 @@ def main() -> None:
             run_rename_folders_menu(cfg)
         elif choice == "navigate":
             menus.navigate_to_folder(cfg, renamer_obj)
+        elif choice == "submenu_backup":
+            menus.run_backup_submenu(cfg)
         elif choice == "submenu_identity":
             run_identity_submenu(cfg, renamer_obj)
         elif choice == "submenu_utilities":

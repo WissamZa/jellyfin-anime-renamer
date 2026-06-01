@@ -447,6 +447,121 @@ def process_torrent(
         done, errors, torrent_hash,
     )
 
+    # ═══ 7.5. Record to backup database ═══
+    try:
+        from renamer.db import (
+            AnimeDatabase,
+            compute_hashes_fast,
+            extract_crc32_from_filename,
+            extract_group_name as extract_group_from_name,
+            _resolve_titles,
+        )
+        from renamer.parsers import EpisodeNumberParser
+
+        db = AnimeDatabase()
+        ep_parser = EpisodeNumberParser()
+        group = extract_group_from_name(real_title) or extract_group_from_name(torrent_name)
+
+        # Resolve both English and Romaji titles
+        title_en, title_rom, resolved_tmdb_id = _resolve_titles(official_name, cfg)
+        if resolved_tmdb_id and not tmdb_id:
+            tmdb_id = resolved_tmdb_id
+        if not title_en and official_name:
+            title_en = official_name
+        if not title_rom:
+            title_rom = official_name
+
+        # Use a single connection for the entire batch
+        with db._connect() as conn:
+            for r in results:
+                if not r.success:
+                    continue
+
+                orig_name = r.original
+                # Find the file on disk (may be in a season subfolder)
+                renamed_path = Path(r.renamed) if r.renamed else None
+                file_path = renamed_path if renamed_path and renamed_path.exists() else None
+
+                # Step 1: CRC32 from filename (zero cost)
+                crc32 = extract_crc32_from_filename(orig_name)
+                file_size = file_path.stat().st_size if file_path else None
+
+                # Step 2: Quick match check
+                existing = db.find_existing(
+                    conn=conn,
+                    crc32=crc32,
+                    file_name=orig_name,
+                    size=file_size,
+                )
+
+                if existing:
+                    # Fill missing fields only (safe hydration)
+                    missing = db.get_missing_fields(existing["id"])
+                    if missing and file_path:
+                        need_ed2k = "ed2k" in missing
+                        need_sha1 = "sha1" in missing or "md5" in missing
+                        hashes = compute_hashes_fast(
+                            file_path, need_sha1=need_sha1, need_ed2k=need_ed2k,
+                        )
+                        update_fields = {k: v for k, v in hashes.items() if k in missing}
+                        if update_fields:
+                            db.update_record_safe(existing["id"], conn=conn, **update_fields)
+                    log.info("Backup DB: record #%d updated (missing fields)", existing["id"])
+                    continue
+
+                # Step 3: New file — compute all hashes
+                hashes: dict = {}
+                if file_path:
+                    hashes = compute_hashes_fast(file_path, need_sha1=True, need_ed2k=True)
+                if crc32:
+                    hashes["crc32"] = crc32  # prefer filename CRC32
+
+                # Parse season/episode from the rename result's episode info
+                season_num = r.episode.season if r.episode else None
+                episode_num = r.episode.episode if r.episode else None
+                if (season_num is None or episode_num is None) and orig_name:
+                    s, e = ep_parser.parse_season_episode(orig_name)
+                    if s is not None:
+                        season_num = s
+                    if e is not None:
+                        episode_num = e
+                    if season_num is None and episode_num is None:
+                        abs_num = ep_parser.parse(orig_name)
+                        if abs_num is not None:
+                            season_num = 1
+                            episode_num = abs_num
+
+                # Build record
+                record: dict = {
+                    "anime_title_en": title_en,
+                    "anime_title_rom": title_rom,
+                    "file_name": orig_name,
+                    "season_num": season_num,
+                    "episode_num": episode_num,
+                    "size_in_bytes": file_size,
+                    "group_name": group,
+                    "torrent_name": torrent_name,
+                    "torrent_hash": torrent_hash,
+                    "tmdb_id": tmdb_id,
+                    **hashes,
+                }
+
+                # Insert within the same connection
+                cols = [k for k, v in record.items() if v is not None]
+                vals = [record[k] for k in cols]
+                col_str = ", ".join(cols)
+                placeholders = ", ".join("?" for _ in cols)
+                conn.execute(
+                    f"INSERT INTO anime_backup ({col_str}) VALUES ({placeholders})",
+                    vals,
+                )
+                log.info("Backup DB: added %s", orig_name)
+
+            conn.commit()
+
+    except Exception as exc:
+        log.warning("Backup DB recording failed (non-fatal): %s", exc)
+
     # 8. Set folder icon from provider poster
     try:
         # Update series_folder in case it was renamed by the renamer

@@ -15,10 +15,11 @@ Supports:
     - Folder icons from provider posters (Dolphin / Nautilus / Thunar)
 """
 
-__version__ = "2.2.0"
+__version__ = "2.3.2"
 
 from renamer.cache import SeriesCache
 from renamer.config import Config, Provider, get_logger
+from renamer.db import AnimeDatabase, ScanResult, UpsertResult, format_size
 from renamer.hash_organizer import HashOrganizer, OrganizePlan, OrganizeResult
 from renamer.history import RenameHistory
 from renamer.icons import (
@@ -74,6 +75,11 @@ __all__ = [
     # Storage
     "SeriesCache",
     "RenameHistory",
+    # Database
+    "AnimeDatabase",
+    "UpsertResult",
+    "ScanResult",
+    "format_size",
     # Utilities
     "Romaniser",
     "anime_title_case",

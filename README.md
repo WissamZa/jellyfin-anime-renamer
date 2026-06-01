@@ -563,7 +563,7 @@ Two GitHub Actions workflows are included:
 2. **Test** — `pytest` across Python 3.11, 3.12, 3.13 on Ubuntu, Windows, and macOS
 3. **Build** — verifies the wheel and sdist can be built
 
-**`release.yml`** — triggered by a version tag (e.g. `v2.3.0`):
+**`release.yml`** — triggered by a version tag (e.g. `v2.3.2`):
 
 1. **Validate** — checks that the tag matches `pyproject.toml` and `renamer/__init__.py`
 2. **Test** — full test matrix

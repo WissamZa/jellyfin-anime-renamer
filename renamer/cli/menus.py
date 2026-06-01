@@ -1439,3 +1439,601 @@ def _make_series_config_for_icon(
     """
     from renamer.cli.multi_series import _make_series_config
     return _make_series_config(series, base_cfg)
+
+
+# ---------------------------------------------------------------------------
+# Backup Database Menu
+# ---------------------------------------------------------------------------
+
+def _backup_menu_options() -> list[tuple[str, str]]:
+    """Return the backup database submenu options."""
+    return [
+        ("View all records", "backup_view"),
+        ("Search records (title / hash / group)", "backup_search"),
+        ("Scan folder to database", "backup_scan"),
+        ("Restore original filenames  (using hashes)", "backup_restore"),
+        ("Add record manually", "backup_add"),
+        ("Edit record", "backup_edit"),
+        ("Delete record", "backup_delete"),
+        ("Export to JSON", "backup_export"),
+        ("Import from JSON", "backup_import"),
+        ("Show statistics", "backup_stats"),
+        ("<-- Back to main menu", "back"),
+    ]
+
+
+def run_backup_submenu(cfg: Config) -> None:
+    """Run the Anime Backup Database sub-menu."""
+    from renamer.db import AnimeDatabase
+
+    db = AnimeDatabase()
+
+    while True:
+        result = Picker(
+            _backup_menu_options(),
+            title="ANIME BACKUP DATABASE",
+            default_index=0,
+        ).run()
+
+        if result is None or result[1] == "back":
+            break
+
+        action = result[1]
+        if action == "backup_view":
+            _backup_view(db)
+        elif action == "backup_search":
+            _backup_search(db)
+        elif action == "backup_scan":
+            _backup_scan(db, cfg)
+        elif action == "backup_restore":
+            _backup_restore(db, cfg)
+        elif action == "backup_add":
+            _backup_add(db, cfg)
+        elif action == "backup_edit":
+            _backup_edit(db)
+        elif action == "backup_delete":
+            _backup_delete(db)
+        elif action == "backup_export":
+            _backup_export(db)
+        elif action == "backup_import":
+            _backup_import(db)
+        elif action == "backup_stats":
+            _backup_stats(db)
+
+
+def _backup_view(db) -> None:
+    """View all records with pagination."""
+    from renamer.db import PAGE_SIZE, format_size
+
+    total = db.count()
+    if total == 0:
+        print("\n  Database is empty. Scan a folder or add records manually.")
+        return
+
+    offset = 0
+    while True:
+        records = db.list_all(limit=PAGE_SIZE, offset=offset)
+        page = offset // PAGE_SIZE + 1
+        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+
+        print(f"\n  {'=' * 60}")
+        print(f"  Anime Backup Records ({total} total, page {page}/{total_pages})")
+        print(f"  {'=' * 60}")
+
+        for r in records:
+            title = r.get("anime_title_rom") or r.get("anime_title_en") or "?"
+            group = r.get("group_name") or ""
+            en = r.get("anime_title_en") or ""
+            s = r.get("season_num")
+            e = r.get("episode_num")
+            ep_str = f" S{s:02d}E{e:02d}" if s and e else ""
+
+            size_str = format_size(r.get("size_in_bytes"))
+            crc = r.get("crc32") or "-"
+            md5 = (r.get("md5") or "-")[:12] + "..." if r.get("md5") else "-"
+            sha1 = (r.get("sha1") or "-")[:12] + "..." if r.get("sha1") else "-"
+            ed2k = (r.get("ed2k") or "-")[:12] + "..." if r.get("ed2k") else "-"
+            tmdb = r.get("tmdb_id") or "-"
+
+            print(f"\n  #{r['id']}  {title}{ep_str}  [{group}]")
+            if en and en != title:
+                print(f"      English : {en}")
+            print(f"      File    : {r.get('file_name', '?')}")
+            print(f"      Size    : {size_str}  |  TMDB: {tmdb}")
+            print(f"      CRC32   : {crc}  |  MD5: {md5}")
+            print(f"      SHA1    : {sha1}")
+            print(f"      ED2K    : {ed2k}")
+            print(f"      Added   : {r.get('date_added', '?')}")
+
+        # Navigation
+        print(f"\n  {'-' * 60}")
+        nav_options = []
+        if offset + PAGE_SIZE < total:
+            nav_options.append(("Next page", "next"))
+        if offset > 0:
+            nav_options.append(("Previous page", "prev"))
+        nav_options.append(("Edit a record", "edit"))
+        nav_options.append(("Delete a record", "delete"))
+        nav_options.append(("<-- Back", "back"))
+
+        nav = Picker(nav_options, title="NAVIGATION", default_index=0).run()
+        if nav is None or nav[1] == "back":
+            break
+        elif nav[1] == "next":
+            offset += PAGE_SIZE
+        elif nav[1] == "prev":
+            offset = max(0, offset - PAGE_SIZE)
+        elif nav[1] == "edit":
+            _backup_edit(db)
+        elif nav[1] == "delete":
+            _backup_delete(db)
+
+
+def _backup_search(db) -> None:
+    """Search records."""
+    query = input("\n  Search (title, filename, group, hash): ").strip()
+    if not query:
+        print("  Cancelled.")
+        return
+
+    results = db.search(query)
+    if not results:
+        print(f"  No records found matching '{query}'.")
+        return
+
+    print(f"\n  Found {len(results)} record(s):\n")
+    for r in results:
+        title = r.get("anime_title_rom") or "?"
+        s = r.get("season_num")
+        e = r.get("episode_num")
+        ep_str = f" S{s:02d}E{e:02d}" if s and e else ""
+        print(f"  #{r['id']}  {title}{ep_str}  - {r.get('file_name', '?')}")
+
+
+def _backup_scan(db, cfg: Config) -> None:
+    """Scan a folder and add/update records with confirmation."""
+    options = [
+        (f"Current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
+        (f"Current working directory: {Path.cwd()}", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("<-- Back", "back"),
+    ]
+    result = Picker(options, title="SCAN FOLDER TO DATABASE", default_index=0).run()
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    target_dir = None
+    if choice == "media_dir":
+        target_dir = cfg.media_dir
+    elif choice == "cwd":
+        target_dir = Path.cwd()
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if custom:
+            target_dir = Path(custom).resolve()
+            if not target_dir.is_dir():
+                print(f"  Directory does not exist: {target_dir}")
+                return
+
+    if not target_dir:
+        return
+
+    print(f"\n  Scanning: {target_dir}")
+    print("  This may take a while for large collections...\n")
+
+    scan_result = db.scan_folder(target_dir, cfg.video_extensions, cfg)
+
+    from renamer.db import format_size
+
+    print(f"\n  {'=' * 60}")
+    print(f"  SCAN RESULTS:")
+    print(f"    New files to add       : {scan_result.added}")
+    print(f"    Existing (complete)    : {scan_result.skipped}  (skipped)")
+    print(f"    Existing (needs update): {scan_result.updated}")
+    if scan_result.renamed:
+        print(f"    Renamed files detected : {scan_result.renamed}  (will update file_name)")
+    print(f"    Errors                 : {scan_result.errors}")
+    print(f"  {'=' * 60}")
+
+    if scan_result.added == 0 and scan_result.updated == 0 and scan_result.renamed == 0:
+        print("\n  Nothing to add or update.")
+        return
+
+    # Preview renamed files
+    if scan_result.pending_renames:
+        print(f"\n  -- Renamed Files Preview --")
+        for record_id, force_fields, existing in scan_result.pending_renames:
+            old_name = existing.get("file_name", "?")
+            new_name = force_fields.get("file_name", old_name)
+            print(f"\n  Record #{record_id}:")
+            if "file_name" in force_fields:
+                print(f"    file_name: {old_name}")
+                print(f"            -> {new_name}")
+            for k, v in force_fields.items():
+                if k != "file_name":
+                    old_val = existing.get(k, "(empty)")
+                    print(f"    {k}: {old_val}")
+                    print(f"       -> {v}")
+
+    # Preview new records
+    if scan_result.pending_inserts:
+        print(f"\n  -- New Records Preview --")
+        for rec in scan_result.pending_inserts:
+            title = rec.get("anime_title_rom", "?")
+            s = rec.get("season_num")
+            e = rec.get("episode_num")
+            ep_str = f" S{s:02d}E{e:02d}" if s and e else ""
+            size_str = format_size(rec.get("size_in_bytes"))
+            print(f"\n  NEW  {title}{ep_str}")
+            print(f"       File  : {rec.get('file_name', '?')}")
+            print(f"       Size  : {size_str}")
+            print(f"       CRC32 : {rec.get('crc32', '-')}")
+            if rec.get("anime_title_en"):
+                print(f"       English : {rec['anime_title_en']}")
+
+    # Preview updates
+    if scan_result.pending_updates:
+        print(f"\n  -- Updates Preview --")
+        for record_id, fields, existing in scan_result.pending_updates:
+            print(f"\n  Record #{record_id}: {existing.get('file_name', '?')}")
+            print(f"    WILL ADD (not overwrite):")
+            for k, v in fields.items():
+                print(f"      {k}: (empty) -> {v}")
+
+    # Confirm
+    print(f"\n  {'-' * 60}")
+    confirm = input(
+        f"  Apply {scan_result.added} insert(s), "
+        f"{scan_result.updated} update(s), and "
+        f"{scan_result.renamed} rename(s)? (Y/n): "
+    ).strip().lower()
+
+    if confirm in ("n", "no"):
+        print("  Cancelled - no changes made.")
+        return
+
+    # Apply
+    inserted, updated = db.apply_scan(scan_result)
+    print(f"\n  + {inserted} record(s) inserted")
+    print(f"  + {updated} record(s) updated")
+    print("  Done!")
+
+
+def _backup_restore(db, cfg: Config) -> None:
+    """Rename files on disk back to their original names using hash-based DB lookup."""
+    options = [
+        (f"Current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
+        (f"Current working directory: {Path.cwd()}", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("<-- Back", "back"),
+    ]
+    result = Picker(options, title="RESTORE ORIGINAL FILENAMES (USING HASHES)", default_index=0).run()
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    target_dir = None
+    if choice == "media_dir":
+        target_dir = cfg.media_dir
+    elif choice == "cwd":
+        target_dir = Path.cwd()
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if custom:
+            target_dir = Path(custom).resolve()
+            if not target_dir.is_dir():
+                print(f"  Directory does not exist: {target_dir}")
+                return
+
+    if not target_dir:
+        return
+
+    # Ask execution mode
+    mode_result = Picker(
+        [
+            ("Dry Run  (preview only — no files renamed)", "dry"),
+            ("Live Rename  (restore files to their original names)", "live"),
+            ("Cancel", "cancel"),
+        ],
+        title="RESTORE EXECUTION MODE",
+        default_index=0,
+    ).run()
+
+    if mode_result is None or mode_result[1] == "cancel":
+        print("  Cancelled.")
+        return
+
+    dry_run = mode_result[1] == "dry"
+
+    if not dry_run:
+        print("\n  WARNING: This will rename files on disk to match their database names.")
+        if input("  Continue? (y/N): ").strip().lower() != "y":
+            print("  Cancelled.")
+            return
+
+    db.restore_original_names(target_dir, cfg.video_extensions, dry_run=dry_run)
+
+
+def _backup_add(db, cfg: Config) -> None:
+    """Add a record manually."""
+    from renamer.db import compute_hashes_fast
+
+    print("\n  === Add Record Manually ===\n")
+
+    anime_title_rom = input("  Romaji title (required): ").strip()
+    if not anime_title_rom:
+        print("  Cancelled.")
+        return
+
+    anime_title_en = input("  English title (Enter to skip): ").strip() or None
+    file_name = input("  File name (required): ").strip()
+    if not file_name:
+        print("  Cancelled.")
+        return
+
+    season_input = input("  Season number (Enter to skip): ").strip()
+    episode_input = input("  Episode number (Enter to skip): ").strip()
+    season_num = int(season_input) if season_input else None
+    episode_num = int(episode_input) if episode_input else None
+
+    file_path_input = input("  File path for hashing (Enter to skip): ").strip()
+    hashes = {}
+    file_size = None
+    if file_path_input:
+        fp = Path(file_path_input)
+        if fp.exists():
+            file_size = fp.stat().st_size
+            compute = input("  Compute hashes? (Y/n): ").strip().lower()
+            if compute not in ("n", "no"):
+                hashes = compute_hashes_fast(fp, need_sha1=True, need_ed2k=True)
+
+    group_name = input("  Group name (Enter to skip): ").strip() or None
+    tmdb_input = input("  TMDB ID (Enter to skip): ").strip()
+    tmdb_id = int(tmdb_input) if tmdb_input else None
+
+    record = {
+        "anime_title_en": anime_title_en,
+        "anime_title_rom": anime_title_rom,
+        "file_name": file_name,
+        "season_num": season_num,
+        "episode_num": episode_num,
+        "size_in_bytes": file_size,
+        "group_name": group_name,
+        "tmdb_id": tmdb_id,
+        **hashes,
+    }
+
+    print(f"\n  -- Record Preview --")
+    for k, v in record.items():
+        if v is not None:
+            print(f"    {k}: {v}")
+
+    confirm = input("\n  Add this record? (Y/n): ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        return
+
+    rid = db.add_record(**record)
+    print(f"  + Added as record #{rid}")
+
+
+def _backup_edit(db) -> None:
+    """Edit an existing record (force override for explicit user edits)."""
+    rid_input = input("\n  Record ID to edit: ").strip()
+    if not rid_input:
+        print("  Cancelled.")
+        return
+
+    try:
+        rid = int(rid_input)
+    except ValueError:
+        print("  Invalid ID.")
+        return
+
+    record = db.get_by_id(rid)
+    if not record:
+        print(f"  Record #{rid} not found.")
+        return
+
+    print(f"\n  === Edit Record #{rid} ===\n")
+
+    editable = [
+        ("anime_title_en", "English title"),
+        ("anime_title_rom", "Romaji title"),
+        ("file_name", "File name"),
+        ("season_num", "Season"),
+        ("episode_num", "Episode"),
+        ("group_name", "Group name"),
+        ("tmdb_id", "TMDB ID"),
+        ("crc32", "CRC32"),
+        ("md5", "MD5"),
+        ("sha1", "SHA1"),
+        ("ed2k", "ED2K"),
+    ]
+
+    updates = {}
+    for field, label in editable:
+        current = record.get(field)
+        prompt = f"  {label} [{current or '(empty)'}]: "
+        new_val = input(prompt).strip()
+        if new_val:
+            if field in ("season_num", "episode_num", "tmdb_id", "size_in_bytes"):
+                try:
+                    new_val = int(new_val)
+                except ValueError:
+                    print(f"    Invalid number - not changed.")
+                    continue
+            updates[field] = new_val
+
+    if not updates:
+        print("  No changes.")
+        return
+
+    print(f"\n  -- Changes --")
+    for k, v in updates.items():
+        old = record.get(k)
+        print(f"    {k}: {old} -> {v}")
+
+    confirm = input("\n  Save changes? (Y/n): ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        return
+
+    # Use force override — explicit user edits should overwrite
+    db.update_record_force(rid, **updates)
+    print(f"  + Record #{rid} updated.")
+
+
+def _backup_delete(db) -> None:
+    """Delete a record with confirmation."""
+    rid_input = input("\n  Record ID to delete: ").strip()
+    if not rid_input:
+        print("  Cancelled.")
+        return
+
+    try:
+        rid = int(rid_input)
+    except ValueError:
+        print("  Invalid ID.")
+        return
+
+    record = db.get_by_id(rid)
+    if not record:
+        print(f"  Record #{rid} not found.")
+        return
+
+    title = record.get("anime_title_rom") or "?"
+    fname = record.get("file_name") or "?"
+    s = record.get("season_num")
+    e = record.get("episode_num")
+    ep_str = f" S{s:02d}E{e:02d}" if s and e else ""
+
+    print(f"\n  WARNING: You are about to delete:")
+    print(f"    #{rid}  {title}{ep_str}")
+    print(f"    File: {fname}")
+
+    confirm = input("  Confirm DELETE? (y/N): ").strip().lower()
+    if confirm != "y":
+        print("  Cancelled.")
+        return
+
+    if db.delete_record(rid):
+        print(f"  + Record #{rid} deleted.")
+    else:
+        print(f"  Failed to delete record #{rid}.")
+
+
+def _backup_export(db) -> None:
+    """Export records to JSON."""
+    total = db.count()
+    if total == 0:
+        print("\n  Database is empty - nothing to export.")
+        return
+
+    options = [
+        (f"All records ({total})", "all"),
+        ("Filtered by anime title", "by_title"),
+        ("Filtered by group name", "by_group"),
+        ("<-- Back", "back"),
+    ]
+    result = Picker(options, title="EXPORT TO JSON", default_index=0).run()
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    records = None
+
+    if choice == "by_title":
+        title = input("  Anime title: ").strip()
+        if not title:
+            print("  Cancelled.")
+            return
+        records = db.get_by_anime_title(title)
+        print(f"  Found {len(records)} record(s) for '{title}'.")
+    elif choice == "by_group":
+        group = input("  Group name: ").strip()
+        if not group:
+            print("  Cancelled.")
+            return
+        records = db.search(group)
+        records = [r for r in records if r.get("group_name") == group]
+        print(f"  Found {len(records)} record(s) for group '{group}'.")
+
+    output = input("  Export path [./anime_backup_export.json]: ").strip()
+    if not output:
+        output = "./anime_backup_export.json"
+    output_path = Path(output).resolve()
+
+    db.export_to_json(output_path, records=records)
+    print(f"  + Exported to {output_path}")
+
+
+def _backup_import(db) -> None:
+    """Import records from JSON."""
+    import json as _json
+
+    path_input = input("\n  JSON file path: ").strip()
+    if not path_input:
+        print("  Cancelled.")
+        return
+
+    json_path = Path(path_input).resolve()
+    if not json_path.exists():
+        print(f"  File not found: {json_path}")
+        return
+
+    # Preview
+    data = _json.loads(json_path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = [data]
+    count = len(data)
+
+    print(f"\n  Found {count} record(s) in {json_path.name}")
+
+    confirm = input(f"  Import {count} record(s)? (Y/n): ").strip().lower()
+    if confirm in ("n", "no"):
+        print("  Cancelled.")
+        return
+
+    added, updated, skipped = db.import_from_json(json_path)
+    print(f"\n  + {added} added, {updated} updated, {skipped} skipped")
+
+
+def _backup_stats(db) -> None:
+    """Show database statistics."""
+    from renamer.db import format_size
+
+    stats = db.get_statistics()
+    total = stats["total"]
+
+    if total == 0:
+        print("\n  Database is empty.")
+        return
+
+    total_size = format_size(stats["total_size"])
+
+    print(f"\n  {'=' * 50}")
+    print(f"  Database Statistics")
+    print(f"  {'=' * 50}")
+    print(f"  Total records        : {total}")
+    print(f"  Unique series        : {stats['unique_series']}")
+    print(f"  Unique groups        : {stats['unique_groups']}")
+    print(f"  Total size           : {total_size}")
+    print()
+    print(f"  Hash Coverage:")
+    print(f"    CRC32  : {stats['crc32_count']}/{total}  ({100*stats['crc32_count']//max(total,1)}%)")
+    print(f"    MD5    : {stats['md5_count']}/{total}  ({100*stats['md5_count']//max(total,1)}%)")
+    print(f"    SHA1   : {stats['sha1_count']}/{total}  ({100*stats['sha1_count']//max(total,1)}%)")
+    print(f"    ED2K   : {stats['ed2k_count']}/{total}  ({100*stats['ed2k_count']//max(total,1)}%)")
+    print(f"    TMDB ID: {stats['tmdb_count']}/{total}  ({100*stats['tmdb_count']//max(total,1)}%)")
+
+    if stats["md5_count"] < total:
+        missing_md5 = total - stats["md5_count"]
+        print(f"\n  ! {missing_md5} records missing MD5 - run 'Scan folder' to fill")
+
+    if stats["top_groups"]:
+        print(f"\n  Top Groups:")
+        for name, cnt in stats["top_groups"]:
+            print(f"    {name:30s} : {cnt} files")
+    print(f"  {'=' * 50}")

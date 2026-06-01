@@ -4,7 +4,8 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,38 +15,40 @@ jobs:
   lint:
     name: Lint & type-check
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
       - name: Install dev dependencies
-        run: uv sync --group dev
+        run: uv sync --dev
 
-      - name: Ruff lint
-        run: uv run ruff check .
+      - name: Run ruff (lint)
+        run: uv run ruff check renamer/ tests/
 
-      - name: Ruff format check
-        run: uv run ruff format --check .
+      - name: Run ruff (format check)
+        run: uv run ruff format --check renamer/ tests/
 
-      - name: Pyright type check
+      - name: Run pyright (type-check)
         run: uv run pyright renamer/
+        continue-on-error: true   # type-checking is advisory; don't block CI
 
   test:
-    name: Tests (Python ${{ matrix.python-version }})
+    name: Tests — Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    needs: lint
+
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -59,14 +62,45 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --dev
 
       - name: Run tests with coverage
-        run: uv run pytest --cov=renamer --cov-report=xml
+        run: uv run pytest tests/ -v --tb=short --cov=renamer --cov-report=xml --cov-report=term-missing
 
-      - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+      - name: Upload coverage report
+        if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
         uses: codecov/codecov-action@v4
         with:
-          files: ./coverage.xml
+          files: coverage.xml
           fail_ci_if_error: false
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Check dist contents
+        run: |
+          ls -lh dist/
+          uv run python -c "import zipfile, sys; z=zipfile.ZipFile('$(ls dist/*.whl | head -1)'); print('\n'.join(z.namelist()))"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7

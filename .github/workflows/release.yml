@@ -3,25 +3,104 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v[0-9]+.[0-9]+.[0-9]+"   # e.g. v2.2.0
+      - "v[0-9]+.[0-9]+.[0-9]+-*"  # e.g. v2.3.0-rc1
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v2.3.0)"
+        required: true
 
 permissions:
-  contents: write  # needed to create GitHub Releases
+  contents: write
+  id-token: write   # for PyPI trusted publishing
 
 jobs:
+  # ── 1. Validate the version tag matches pyproject.toml ──────────────────
+  validate:
+    name: Validate version consistency
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: get_version
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: ${VERSION}"
+
+      - name: Check pyproject.toml version matches tag
+        run: |
+          TOML_VER=$(python -c "
+          import re, pathlib
+          t = pathlib.Path('pyproject.toml').read_text()
+          m = re.search(r'^version\s*=\s*\"([^\"]+)\"', t, re.M)
+          print(m.group(1) if m else '')
+          ")
+          TAG_VER="${{ steps.get_version.outputs.version }}"
+          if [ "$TOML_VER" != "$TAG_VER" ]; then
+            echo "ERROR: pyproject.toml version ($TOML_VER) does not match tag ($TAG_VER)"
+            exit 1
+          fi
+          echo "Version check passed: $TAG_VER"
+
+      - name: Check __init__.py version matches tag
+        run: |
+          INIT_VER=$(python -c "
+          import re, pathlib
+          t = pathlib.Path('renamer/__init__.py').read_text()
+          m = re.search(r'__version__\s*=\s*\"([^\"]+)\"', t)
+          print(m.group(1) if m else '')
+          ")
+          TAG_VER="${{ steps.get_version.outputs.version }}"
+          if [ "$INIT_VER" != "$TAG_VER" ]; then
+            echo "ERROR: renamer/__init__.py version ($INIT_VER) does not match tag ($TAG_VER)"
+            exit 1
+          fi
+          echo "Version check passed: $TAG_VER"
+
+  # ── 2. Run the full test suite ───────────────────────────────────────────
+  test:
+    name: Tests — Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    needs: validate
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short
+
+  # ── 3. Build the distribution ────────────────────────────────────────────
   build:
     name: Build distribution
     runs-on: ubuntu-latest
-
+    needs: test
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # full history for changelog generation
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -29,60 +108,83 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
-      - name: Upload build artifacts
+      - name: Store distribution artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: python-dist
           path: dist/
 
+  # ── 4. Publish to PyPI ───────────────────────────────────────────────────
   publish-pypi:
     name: Publish to PyPI
-    needs: build
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # OIDC trusted publishing
-
+    needs: build
+    environment:
+      name: pypi
+      url: https://pypi.org/p/jellyfin-anime-renamer
     steps:
-      - name: Download build artifacts
+      - name: Download distribution artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: python-dist
           path: dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses OIDC trusted publishing — no API token needed.
+        # Configure your PyPI project to trust this GitHub repository first:
+        # https://docs.pypi.org/trusted-publishers/
 
+  # ── 5. Create GitHub Release ─────────────────────────────────────────────
   github-release:
     name: Create GitHub Release
-    needs: build
     runs-on: ubuntu-latest
-
+    needs: [build, validate]
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # full history for changelog generation
 
-      - name: Download build artifacts
+      - name: Download distribution artifacts
         uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: python-dist
           path: dist/
 
-      - name: Extract changelog for this version
+      - name: Generate changelog from commits
         id: changelog
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          # Pull the section between this version header and the next
-          NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md 2>/dev/null || echo "See CHANGELOG.md for details.")
-          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$NOTES" >> "$GITHUB_OUTPUT"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges | head -20)
+          fi
+          echo "changelog<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: "v${{ needs.validate.outputs.version }}"
+          body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+            **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ github.ref_name }}...HEAD
+
+            ## Installation
+
+            ```bash
+            pip install jellyfin-anime-renamer==${{ needs.validate.outputs.version }}
+            # or with uv:
+            uv add jellyfin-anime-renamer==${{ needs.validate.outputs.version }}
+            ```
           files: dist/*
-          body: ${{ steps.changelog.outputs.notes }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: false

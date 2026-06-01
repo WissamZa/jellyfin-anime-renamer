@@ -26,10 +26,11 @@ env/
 coverage.xml
 htmlcov/
 .tox/
-.ruff_cache/
+
 # ── Type checkers ────────────────────────────────────────
 .pyright/
 .mypy_cache/
+.ruff_cache/
 
 # ── Editors ──────────────────────────────────────────────
 .vscode/
@@ -52,4 +53,4 @@ anime_library.db
 anidb_titles.dat.gz
 .old
 *.zip
-*.db
+*.db*
