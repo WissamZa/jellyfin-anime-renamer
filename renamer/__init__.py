@@ -15,7 +15,7 @@ Supports:
     - Folder icons from provider posters (Dolphin / Nautilus / Thunar)
 """
 
-__version__ = "2.3.2"
+__version__ = "2.3.5"
 
 from renamer.cache import SeriesCache
 from renamer.config import Config, Provider, get_logger
@@ -31,7 +31,7 @@ from renamer.icons import (
     set_folder_icon_batch,
 )
 from renamer.parsers import EpisodeNumberParser, SpecialParser
-from renamer.picker import MultiPicker, Picker, multi_pick, pick
+from renamer.picker import BackSignal, MultiPicker, Picker, back_input, multi_pick, pick
 from renamer.providers.base import (
     EpisodeGroupInfo,
     EpisodeInfo,
@@ -90,6 +90,8 @@ __all__ = [
     "pick",
     "MultiPicker",
     "multi_pick",
+    "BackSignal",
+    "back_input",
     # Data classes
     "EpisodeGroupInfo",
     "EpisodeInfo",

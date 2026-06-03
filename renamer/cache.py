@@ -48,6 +48,8 @@ class SeriesCache:
         kitsu_id: int | None = None,
         episode_group_id: str | None = None,
         episode_start_mode: str | None = None,
+        episode_title_lang: str | None = None,
+        season_arc_names: dict[int, str] | None = None,
     ) -> None:
         """
         Save resolved series info to the cache file.
@@ -60,6 +62,8 @@ class SeriesCache:
             "kitsu_id":           kitsu_id,
             "episode_group_id":   episode_group_id,
             "episode_start_mode": episode_start_mode,
+            "episode_title_lang": episode_title_lang,
+            "season_arc_names":   season_arc_names,
         }
         try:
             self._path.write_text(

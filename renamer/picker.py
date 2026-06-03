@@ -87,9 +87,11 @@ def _read_key_raw(fd: int) -> str:
     """Read a single keypress from *fd* (must be in cbreak/raw mode).
 
     Returns one of: ``"UP"``, ``"DOWN"``, ``"ENTER"``, ``"ESC"``,
-    ``"BACKSPACE"``, or the literal character.
+    ``"BACKSPACE"``, ``"CTRL_Q"``, or the literal character.
     """
     ch = sys.stdin.read(1)
+    if ch == "\x11":  # Ctrl+Q
+        return "CTRL_Q"
     if ch == "\033":
         ch2 = sys.stdin.read(1)
         if ch2 == "[":
@@ -141,7 +143,7 @@ class Picker:
         self.indicator = indicator
         self.index = max(0, min(default_index, len(options) - 1))
         self._help = help_text or (
-            "↑↓/jk navigate · number+Enter · Enter confirm · q cancel"
+            "↑↓/jk navigate · number+Enter · Enter confirm · q/ctrl+q cancel/back"
         )
         self._num_buf = ""
         self._lines_drawn: int = 0  # for final cleanup only
@@ -201,7 +203,7 @@ class Picker:
                 sys.stdout.write(_SHOW_CURSOR)
                 sys.stdout.flush()
                 return self.index, self.options[self.index][1]
-            elif key in ("q", "ESC"):
+            elif key in ("q", "ESC", "CTRL_Q"):
                 self._clear()
                 sys.stdout.write(_SHOW_CURSOR)
                 sys.stdout.flush()
@@ -400,7 +402,7 @@ class MultiPicker:
         self.index = 0
         self._selected: set[int] = set(preselected or [])
         self._help = (
-            "↑↓/jk navigate · Space toggle · a all · Enter confirm · q cancel"
+            "↑↓/jk navigate · Space toggle · a all · Enter confirm · q/ctrl+q cancel"
         )
         self._lines_drawn: int = 0
 
@@ -466,7 +468,7 @@ class MultiPicker:
                 sys.stdout.write(_SHOW_CURSOR)
                 sys.stdout.flush()
                 return [(i, self.options[i][1]) for i in sorted(self._selected)]
-            elif key in ("q", "ESC"):
+            elif key in ("q", "ESC", "CTRL_Q"):
                 self._clear()
                 sys.stdout.write(_SHOW_CURSOR)
                 sys.stdout.flush()
@@ -611,4 +613,111 @@ def multi_pick(
             process(path)
     """
     return MultiPicker(options, title=title, preselected=preselected).run()
+
+
+# ── Ctrl+Q-aware input ────────────────────────────────────────
+
+class BackSignal(Exception):
+    """
+    Raised by :func:`back_input` when the user presses Ctrl+Q.
+
+    Callers should catch this to navigate back to the previous menu.
+    """
+
+
+def back_input(prompt: str = "", default: str = "") -> str:
+    """
+    Like ``input()`` but supports Ctrl+Q to go back.
+
+    When the user presses Ctrl+Q, this function raises :class:`BackSignal`
+    instead of returning.  Callers should catch this to navigate back.
+
+    In non-TTY environments (piped mode), falls back to regular ``input()``
+    where the user can type ``q`` or ``back`` on an empty line to go back.
+
+    Parameters
+    ----------
+    prompt:
+        The prompt string to display.
+    default:
+        Value to return if the user just presses Enter.
+
+    Returns
+    -------
+    str
+        The user's input (stripped).
+
+    Raises
+    ------
+    BackSignal
+        When the user presses Ctrl+Q (or types 'q'/'back' in non-TTY mode).
+    """
+    if not _is_tty():
+        # Non-TTY fallback — use regular input()
+        try:
+            raw = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            raise BackSignal()
+        if raw.lower() in ("q", "back", "ctrl+q"):
+            raise BackSignal()
+        return raw or default
+
+    # TTY mode — use raw terminal to detect Ctrl+Q
+    try:
+        import termios
+        import tty
+    except ImportError:
+        # No termios available — fall back to regular input
+        try:
+            raw = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            raise BackSignal()
+        return raw or default
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+
+        buf = ""
+        while True:
+            ch = sys.stdin.read(1)
+
+            if ch == "\x11":  # Ctrl+Q → go back
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                raise BackSignal()
+
+            if ch == "\x7f" or ch == "\x08":  # Backspace
+                if buf:
+                    buf = buf[:-1]
+                    # Move cursor back, erase character
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+
+            if ch in ("\r", "\n"):  # Enter
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return buf.strip() or default
+
+            if ch == "\x03":  # Ctrl+C → cancel (also go back)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                raise BackSignal()
+
+            # Regular character
+            buf += ch
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+
+    except BackSignal:
+        raise
+    except Exception:
+        raise BackSignal()
+    finally:
+        with contextlib.suppress(Exception):
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
 

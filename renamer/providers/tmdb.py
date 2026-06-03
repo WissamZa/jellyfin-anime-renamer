@@ -179,6 +179,8 @@ class TMDBFetcher(EpisodeFetcher):
         self._cfg = cfg or Config()
         self._has_specials = True
         self._group_specials: dict[int, EpisodeInfo] = {}
+        self._original_se_map: dict[tuple[int, int], EpisodeInfo] = {}
+        self._group_arc_names: dict[int, str] = {}
 
     # ── Alternative Titles ─────────────────────────────────
     def fetch_alternative_titles(self) -> list[dict]:
@@ -345,23 +347,83 @@ class TMDBFetcher(EpisodeFetcher):
 
         romaniser = get_romaniser()
         mapping: dict[int, EpisodeInfo] = {}
-        abs_counter = 1       # counts only regular episodes
+        abs_counter = 1       # counts only regular episodes (fallback)
         special_counter = 1   # counts only specials
         self._group_specials = {}
+
+        # Determine title language preference
+        use_english = getattr(self._cfg, 'episode_title_lang', 'romaji') == 'english'
 
         # Fetch Japanese titles for each original season to merge
         # (episode groups only return English by default)
         ja_titles = self._prefetch_ja_titles_for_groups(groups)
+
+        # Build a mapping from original (season_number, episode_number) to
+        # EpisodeInfo — this allows file matching by original numbering when
+        # the group's season/episode renumbering doesn't match filenames.
+        self._original_se_map: dict[tuple[int, int], EpisodeInfo] = {}
+
+        # Track the sequential season number for non-special groups
+        # (1, 2, 3, ...) regardless of what the group name says.
+        # Group names like "East Blue (1-61)" or "Alabasta (62-143)"
+        # should NOT be used as season numbers — the number in parentheses
+        # is the episode range, not the season number.
+        regular_season_counter = 0
+
+        # Also build arc names from group names for season folder naming
+        self._group_arc_names: dict[int, str] = {}
+
+        # ── First pass: parse group names to determine absolute episode start ──
+        # Group names often contain the absolute episode range, e.g.:
+        #   "East Blue (1-61)" → starts at absolute episode 1
+        #   "Alabasta (62-143)" → starts at absolute episode 62
+        #   "Egghead (1089-1155)" → starts at absolute episode 1089
+        #   "Elbaph (1156-current)" → starts at absolute episode 1156
+        # This is critical because TMDB episode groups may NOT be listed in
+        # episode order, so a simple sequential counter would assign wrong
+        # absolute numbers.  For example, One Piece's Crunchyroll group has
+        # "Egghead (1089-1155)" listed before "Water Seven (229-263)".
+        #
+        # NOTE: The episode count in a group can differ significantly from
+        # the nominal range.  For example, One Piece's Crunchyroll group has
+        # "Egghead (1089-1155)" with 79 episodes (range suggests 67) because
+        # Crunchyroll includes recaps/specials within the arc that fall
+        # outside the numbered range.  We therefore always trust the range
+        # start number and never reject it based on count mismatch.
+        _EP_RANGE_RE = re.compile(
+            r"\(\s*(\d+)\s*[-\u2013\u2014]\s*(\d+|current|ongoing)\s*\)",
+            re.IGNORECASE,
+        )
+
+        def _parse_group_start(name: str, episode_count: int) -> int | None:
+            """Extract the starting absolute episode number from a group name.
+
+            Returns the start of the range (e.g. 1089 from "Egghead (1089-1155)"),
+            or None if the group name doesn't contain a range.
+
+            The episode_count parameter is accepted for logging only — we no
+            longer reject a valid range based on count mismatch, because
+            Crunchyroll/other groups routinely include extra episodes (recaps,
+            specials) beyond the nominal range.
+            """
+            m = _EP_RANGE_RE.search(name)
+            if m:
+                start = int(m.group(1))
+                # Basic sanity: start must be a positive number
+                if start > 0:
+                    return start
+            return None
 
         for group in groups:
             episodes = group.get("episodes", [])
             gname = group.get("name", "").strip()
 
             # ── Determine season number ──────────────────────
+            # Always use sequential numbering for non-special groups.
             # The group's "order" field is the 0-based position of
-            # this sub-group within the episode group, NOT the season
-            # number.  We must derive the season from the name or
-            # from the episodes' original season_number values.
+            # this sub-group within the episode group, but it may not
+            # be reliable (some groups have order=None).  We use our
+            # own counter instead.
             is_specials_group = False
 
             # Check 1: group name clearly indicates specials
@@ -375,16 +437,26 @@ class TMDBFetcher(EpisodeFetcher):
                     is_specials_group = True
                     season_num = 0
                 else:
-                    # Check 3: extract season number from group name
-                    sm = re.search(r"(\d+)", gname)
-                    # Use season number from name, or group order+1 as last resort
-                    season_num = int(sm.group(1)) if sm else (group.get("order", 0) or 0) + 1
+                    # Use sequential season number — do NOT extract
+                    # numbers from the group name (e.g. "Alabasta (62-143)"
+                    # does NOT mean season 62).
+                    regular_season_counter += 1
+                    season_num = regular_season_counter
+
+            # Store the group name as the arc name for this season
+            if not is_specials_group and gname:
+                self._group_arc_names[season_num] = gname
+
+            # Determine absolute episode start for this group
+            group_abs_start = _parse_group_start(gname, len(episodes))
 
             log.info(
-                "  Group '%s' (season %d%s): %d episodes",
+                "  Group '%s' (season %d%s): %d episodes%s",
                 gname, season_num,
                 ", specials" if is_specials_group else "",
                 len(episodes),
+                f", abs range {group_abs_start}-{group_abs_start + len(episodes) - 1}"
+                if group_abs_start else "",
             )
 
             for i, ep in enumerate(episodes):
@@ -393,13 +465,52 @@ class TMDBFetcher(EpisodeFetcher):
                 # instead of the buggy `order or episode_number` logic.
                 ep_order = i + 1
 
-                ep_title = ep.get("name", f"Episode {abs_counter}")
-
-                # Try to find Japanese title from our prefetch
+                # Extract original TMDB season/episode BEFORE computing
+                # actual_abs so we can use orig_ep for absolute numbering.
                 orig_season = ep.get("season_number", 0)
                 orig_ep = ep.get("episode_number", 0)
+
+                # Compute the actual absolute episode number.
+                # Strategy:
+                #   1. If the group has a range AND orig_ep looks like an
+                #      absolute number (orig_ep >= group_abs_start), use
+                #      orig_ep directly.  This handles shows like One Piece
+                #      where TMDB stores absolute episode numbers.
+                #   2. If the group has a range but orig_ep is per-season
+                #      (small number), use group_abs_start + position.
+                #   3. If no range, fall back to the sequential counter.
+                if group_abs_start is not None:
+                    if orig_ep >= group_abs_start:
+                        # orig_ep is an absolute episode number — use it
+                        # directly.  This correctly handles extra episodes
+                        # in a group that fall beyond the nominal range
+                        # (e.g. recaps/specials Crunchyroll places in an
+                        # arc group but which have different absolute nums).
+                        actual_abs = orig_ep
+                    else:
+                        # orig_ep is per-season numbering — compute from
+                        # the group's range start + position.
+                        actual_abs = group_abs_start + i
+                else:
+                    actual_abs = abs_counter
+
+                # Warn if actual_abs collides with an existing mapping
+                # (can happen when groups overlap or abs_counter goes
+                # wrong due to out-of-order groups without ranges).
+                if actual_abs in mapping and not is_specials_group:
+                    log.warning(
+                        "Absolute number %d already mapped (group '%s', "
+                        "position %d) — overwriting.  This usually means "
+                        "the group_abs_start for a group without a range "
+                        "name is incorrect.",
+                        actual_abs, gname, i,
+                    )
+
+                ep_title = ep.get("name", f"Episode {actual_abs}")
+
+                # Try to find Japanese title from our prefetch
                 ja_title = ja_titles.get((orig_season, orig_ep), "")
-                if ja_title:
+                if ja_title and not use_english:
                     ep_title = romaniser.to_romaji(ja_title)
 
                 if is_specials_group:
@@ -417,7 +528,7 @@ class TMDBFetcher(EpisodeFetcher):
                     special_counter += 1
                 else:
                     info = EpisodeInfo(
-                        absolute=abs_counter,
+                        absolute=actual_abs,
                         season=season_num,
                         episode=ep_order,
                         title=ep_title,
@@ -426,7 +537,10 @@ class TMDBFetcher(EpisodeFetcher):
                         source=f"{self.name} (Group: {group_name})",
                         is_special=False,
                     )
-                    mapping[abs_counter] = info
+                    mapping[actual_abs] = info
+                    # Also index by original (season, episode) so we can
+                    # match files named with the original TMDB numbering.
+                    self._original_se_map[(orig_season, orig_ep)] = info
                     abs_counter += 1
 
         if self._group_specials:
@@ -529,28 +643,39 @@ class TMDBFetcher(EpisodeFetcher):
             "Found %d seasons — fetching episodes in parallel …", len(seasons)
         )
 
+        # Determine title language preference
+        use_english = getattr(self._cfg, 'episode_title_lang', 'romaji') == 'english'
+
         season_data: dict[int, list] = {}
         romaniser = get_romaniser()
 
         def fetch_season(s: dict) -> tuple[int, list]:
             sn = s["season_number"]
             url = f"{self.BASE}/tv/{self._series_id}/season/{sn}"
-            ja_params = {**self._params, "language": "ja"}
-            data_ja = self._get(url, ja_params, cfg=self._cfg)
             data_en = self._get(url, self._params, cfg=self._cfg)
-            eps_ja = {
-                e["episode_number"]: e
-                for e in (data_ja or {}).get("episodes", [])
-            }
             eps_en = (data_en or {}).get("episodes", [])
             merged = []
-            for ep in eps_en:
-                ep_num = ep["episode_number"]
-                ja_ep = eps_ja.get(ep_num, {})
-                ja_title = ja_ep.get("name", "")
-                if ja_title:
-                    ep["name"] = romaniser.to_romaji(ja_title)
-                merged.append(ep)
+
+            if use_english:
+                # English titles — just use the English API response as-is
+                for ep in eps_en:
+                    merged.append(ep)
+            else:
+                # Romaji titles — fetch Japanese and romanise
+                ja_params = {**self._params, "language": "ja"}
+                data_ja = self._get(url, ja_params, cfg=self._cfg)
+                eps_ja = {
+                    e["episode_number"]: e
+                    for e in (data_ja or {}).get("episodes", [])
+                }
+                for ep in eps_en:
+                    ep_num = ep["episode_number"]
+                    ja_ep = eps_ja.get(ep_num, {})
+                    ja_title = ja_ep.get("name", "")
+                    if ja_title:
+                        ep["name"] = romaniser.to_romaji(ja_title)
+                    merged.append(ep)
+
             return sn, sorted(merged, key=lambda x: x["episode_number"])
 
         with ThreadPoolExecutor(max_workers=self._cfg.max_workers) as pool:
@@ -600,17 +725,21 @@ class TMDBFetcher(EpisodeFetcher):
             log.info("No specials found on TMDB.")
             return {}
 
+        # Determine title language preference
+        use_english = getattr(self._cfg, 'episode_title_lang', 'romaji') == 'english'
+
         romaniser = get_romaniser()
         specials: dict[int, EpisodeInfo] = {}
         for ep in data.get("episodes", []):
             ep_num = ep["episode_number"]
+            ep_title = ep.get("name", f"Special {ep_num}")
+            if not use_english:
+                ep_title = romaniser.to_romaji(ep_title)
             specials[ep_num] = EpisodeInfo(
                 absolute=ep_num,
                 season=0,
                 episode=ep_num,
-                title=romaniser.to_romaji(
-                    ep.get("name", f"Special {ep_num}")
-                ),
+                title=ep_title,
                 air_date=ep.get("air_date", ""),
                 overview=ep.get("overview", ""),
                 source=self.name,

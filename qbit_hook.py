@@ -18,6 +18,7 @@ Flow:
      so qBittorrent keeps tracking the files and seeding continues
 """
 
+import difflib
 import os
 import re
 import sys
@@ -93,6 +94,95 @@ def sanitize(name: str) -> str:
     cleaned = re.sub(r'[\u00a0\u2000-\u200b\u2028\u2029\u3000]', ' ', cleaned)
     cleaned = re.sub(r' {2,}', ' ', cleaned).strip(' .-_')
     return cleaned
+
+
+def normalize_for_matching(s: str) -> str:
+    """Normalize anime titles for robust comparison."""
+    if not s:
+        return ""
+    s = s.lower().strip()
+    # Strip common season/part suffixes to match parent series folder
+    # e.g., "2nd Season", "Season 2", "Part 2", "Part II"
+    s = re.sub(
+        r"\b(?:\d+(?:st|nd|rd|th)?\s+season|season\s+\d+|part\s+\d+|part\s+[ivx]+)\b",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+    # Also strip loose "season", "part", "cour" words if they are trailing/isolated
+    s = re.sub(r"\b(?:season|part|cour)\b", "", s, flags=re.IGNORECASE)
+    # Normalize common romaji variations
+    s = re.sub(r"\bwo\b", "o", s)
+    s = re.sub(r"\bha\b", "wa", s)
+    s = s.replace("ou", "o")
+    s = s.replace("oo", "o")
+    s = s.replace("uu", "u")
+    s = s.replace("aa", "a")
+    s = s.replace("ee", "e")
+    s = s.replace("ii", "i")
+    s = s.replace("sh", "s")
+    s = s.replace("ts", "t")
+    s = s.replace("ch", "t")
+    s = s.replace("gawa", "kawa")
+    # Keep only alphanumeric characters
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+def find_matching_folder(
+    base_path: Path,
+    candidates: list[str],
+    threshold: float = 0.80,
+) -> Path | None:
+    """
+    Search base_path for any directory that matches any of the candidate names.
+    Returns the matching Path if one is found, else None.
+    """
+    if not base_path.exists() or not base_path.is_dir():
+        return None
+
+    # Filter out empty or None candidates, and normalize them
+    normalized_candidates = []
+    for cand in candidates:
+        if cand:
+            norm = normalize_for_matching(cand)
+            if norm and norm not in normalized_candidates:
+                normalized_candidates.append(norm)
+
+    if not normalized_candidates:
+        return None
+
+    log.debug(
+        "Fuzzy folder matching — candidates: %s (normalized: %s)",
+        candidates, normalized_candidates,
+    )
+
+    best_match: Path | None = None
+    best_score: float = 0.0
+
+    for item in base_path.iterdir():
+        if not item.is_dir():
+            continue
+
+        dir_name = item.name
+        norm_dir = normalize_for_matching(dir_name)
+
+        if not norm_dir:
+            continue
+
+        for norm_cand in normalized_candidates:
+            score = difflib.SequenceMatcher(None, norm_cand, norm_dir).ratio()
+            if score > best_score:
+                best_score = score
+                best_match = item
+
+    if best_score >= threshold and best_match:
+        log.info(
+            "Fuzzy folder match found: '%s' matches with similarity %.0f%% (threshold %.0f%%)",
+            best_match.name, best_score * 100, threshold * 100,
+        )
+        return best_match
+
+    return None
 
 
 # ════════════════════ QBIT SESSION ═══════════════════════
@@ -403,9 +493,25 @@ def process_torrent(
     )
 
     # 5. Determine & create the series folder
-    series_folder = BASE_DOWNLOAD_PATH / sanitize(official_name)
-    series_folder.mkdir(parents=True, exist_ok=True)
-    log.info("Series folder: %s", series_folder)
+    title_en = None
+    title_rom = None
+    try:
+        from renamer.db import _resolve_titles
+        t_en, t_rom, _ = _resolve_titles(official_name, Config.from_env())
+        title_en = t_en
+        title_rom = t_rom
+    except Exception as exc:
+        log.warning("Could not resolve titles for fuzzy matching: %s", exc)
+
+    candidates = [series_name, official_name, title_en, title_rom]
+    matched_folder = find_matching_folder(BASE_DOWNLOAD_PATH, candidates)
+    if matched_folder:
+        series_folder = matched_folder
+        log.info("Found matching existing folder: %s", series_folder)
+    else:
+        series_folder = BASE_DOWNLOAD_PATH / sanitize(official_name)
+        series_folder.mkdir(parents=True, exist_ok=True)
+        log.info("Series folder: %s", series_folder)
 
     # 6. Move the torrent's save location in qBit
     log.info("Moving torrent save path to: %s", series_folder)

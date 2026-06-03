@@ -161,6 +161,11 @@ START_MODE_PER_SEASON = "per_season"
 START_MODE_CONTINUING = "continuing"
 _VALID_START_MODES = (START_MODE_PER_SEASON, START_MODE_CONTINUING)
 
+# Episode title language options
+TITLE_LANG_ROMAJI = "romaji"
+TITLE_LANG_ENGLISH = "english"
+_VALID_TITLE_LANGS = (TITLE_LANG_ROMAJI, TITLE_LANG_ENGLISH)
+
 # ---------------------------------------------------------------------------
 # Config dataclass
 # ---------------------------------------------------------------------------
@@ -211,6 +216,8 @@ class Config:
     organize_into_folders: bool = True
     absolute_numbering: bool = False
     episode_start_mode: str = START_MODE_PER_SEASON
+    episode_title_lang: str = TITLE_LANG_ROMAJI  # romaji or english episode titles
+    season_arc_names: dict[int, str] = field(default_factory=dict)  # {season_num: "East Blue (1-61)"}
     use_hash: bool = False          # Enable ED2K hash fallback for unidentified files
     scan_recursive: bool = False    # Scan subfolders recursively
     scan_depth: int = 3             # Max recursion depth for scanning
@@ -284,6 +291,7 @@ class Config:
 
         provider_raw = _str("PROVIDER")
         start_mode_raw = _str("EPISODE_START_MODE", START_MODE_PER_SEASON)
+        title_lang_raw = _str("EPISODE_TITLE_LANG", TITLE_LANG_ROMAJI)
 
         # Parse subtitle extensions from env (comma-separated, e.g. ".srt,.ass,.ssa")
         _subtitle_ext_raw = _str("SUBTITLE_EXTENSIONS")
@@ -317,6 +325,10 @@ class Config:
             episode_start_mode=(
                 start_mode_raw if start_mode_raw in _VALID_START_MODES
                 else START_MODE_PER_SEASON
+            ),
+            episode_title_lang=(
+                title_lang_raw if title_lang_raw in _VALID_TITLE_LANGS
+                else TITLE_LANG_ROMAJI
             ),
             # AniDB credentials
             anidb_username=_str("ANIDB_USERNAME"),

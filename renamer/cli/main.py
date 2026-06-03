@@ -107,6 +107,8 @@ def _identity_menu_options() -> list[tuple[str, str]]:
         ("Select series title (TMDB alt titles + AniList)", "select_title"),
         ("Select episode ordering (group / default)", "select_episode_group"),
         ("Set episode numbering mode (per-season / continuing)", "select_episode_mode"),
+        ("Set episode title language (Romaji / English)", "select_title_lang"),
+        ("Configure season arc names (e.g. East Blue (1-61))  -->", "configure_arc_names"),
         ("Select folder & edit its series ID  -->", "edit_series_id"),
         ("Configure global qBittorrent & hook defaults", "config_qbit_hook"),
         ("<-- Back to main menu", "back"),
@@ -144,6 +146,8 @@ def build_config_from_args(args: argparse.Namespace) -> Config:
         overrides["absolute_numbering"] = args.absolute
     if args.episode_group is not None:
         overrides["episode_group_id"] = args.episode_group
+    if args.title_lang is not None:
+        overrides["episode_title_lang"] = args.title_lang
     if args.use_hash:
         overrides["use_hash"] = True
     if args.recursive:
@@ -476,6 +480,10 @@ def run_identity_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             menus.select_episode_group(cfg, renamer)
         elif action == "select_episode_mode":
             menus.select_episode_start_mode(cfg)
+        elif action == "select_title_lang":
+            menus.select_episode_title_lang(cfg)
+        elif action == "configure_arc_names":
+            menus.configure_season_arc_names(cfg, renamer)
         elif action == "edit_series_id":
             menus.edit_series_id_for_folder(cfg, renamer)
         elif action == "config_qbit_hook":
@@ -649,6 +657,11 @@ def main() -> None:
     parser.add_argument(
         "--episode-group",
         help="TMDB episode group ID for custom season/episode ordering",
+    )
+    parser.add_argument(
+        "--title-lang",
+        choices=["romaji", "english"],
+        help="Episode title language: romaji (default) or english",
     )
     parser.add_argument(
         "--dry-run",

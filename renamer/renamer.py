@@ -225,10 +225,41 @@ class AnimeRenamer:
             log.error("Could not build episode map — aborting.")
             return []
 
+        # ── Extract original season/episode map and arc names from TMDB episode groups ──
+        # These allow matching files named with original TMDB numbering (e.g. S01E1100)
+        # when using an episode group that reorganizes seasons.
+        original_se_map: dict[tuple[int, int], EpisodeInfo] = {}
+        if hasattr(fetcher, "_original_se_map") and fetcher._original_se_map:
+            original_se_map = fetcher._original_se_map
+            log.info(
+                "Episode group: built original season/episode map with %d entries "
+                "for fallback file matching.",
+                len(original_se_map),
+            )
+
+        # Auto-populate season arc names from TMDB episode group names
+        if hasattr(fetcher, "_group_arc_names") and fetcher._group_arc_names:
+            if not self._cfg.season_arc_names:
+                self._cfg.season_arc_names = fetcher._group_arc_names.copy()
+                log.info(
+                    "Auto-populated %d season arc name(s) from episode group.",
+                    len(self._cfg.season_arc_names),
+                )
+            else:
+                # Merge: fill in any missing arc names from the group
+                for s, name in fetcher._group_arc_names.items():
+                    if s not in self._cfg.season_arc_names:
+                        self._cfg.season_arc_names[s] = name
+                log.info(
+                    "Merged arc names: %d total (%d from episode group).",
+                    len(self._cfg.season_arc_names),
+                    len(fetcher._group_arc_names),
+                )
+
         self._save_cache()
         self._cross_reference_ids()
 
-        return self._process_files(episode_map, specials_map, dry_run)
+        return self._process_files(episode_map, specials_map, dry_run, original_se_map)
 
     def undo(self) -> None:
         """Revert the most recent rename session interactively."""
@@ -372,6 +403,10 @@ class AnimeRenamer:
             cfg.episode_group_id = data["episode_group_id"]
         if data.get("episode_start_mode"):
             cfg.episode_start_mode = data["episode_start_mode"]
+        if data.get("episode_title_lang"):
+            cfg.episode_title_lang = data["episode_title_lang"]
+        if data.get("season_arc_names"):
+            cfg.season_arc_names = data["season_arc_names"]
 
     def _save_cache(self) -> None:
         cfg = self._cfg
@@ -383,6 +418,8 @@ class AnimeRenamer:
             kitsu_id=cfg.kitsu_id,
             episode_group_id=cfg.episode_group_id,
             episode_start_mode=cfg.episode_start_mode,
+            episode_title_lang=cfg.episode_title_lang,
+            season_arc_names=cfg.season_arc_names,
         )
 
     # ── Auto-search ───────────────────────────────────────────
@@ -655,6 +692,7 @@ class AnimeRenamer:
         episode_map: dict[int, EpisodeInfo],
         specials_map: dict[int, EpisodeInfo],
         dry_run: bool,
+        original_se_map: dict[tuple[int, int], EpisodeInfo] | None = None,
     ) -> list[RenameResult]:
         cfg = self._cfg
         files = sorted(p for p in cfg.media_dir.rglob("*") if p.is_file())
@@ -688,6 +726,7 @@ class AnimeRenamer:
                 dry_run=dry_run,
                 session_history=session_history,
                 claimed_dests=claimed_dests,
+                original_se_map=original_se_map or {},
             )
             results.append(result)
 
@@ -732,6 +771,7 @@ class AnimeRenamer:
         dry_run: bool,
         session_history: dict[str, str],
         claimed_dests: set[Path],
+        original_se_map: dict[tuple[int, int], EpisodeInfo] | None = None,
     ) -> tuple[RenameResult, int]:
         """
         Classify *path* and return a (RenameResult, next_auto_special) pair.
@@ -775,18 +815,45 @@ class AnimeRenamer:
 
             info = season_ep_map.get((season_num, ep_num))
             if not info:
-                max_season = max((s for s, _ in season_ep_map), default=0)
-                hint = (
-                    f"  (TMDB only has {max_season} season(s) "
-                    "— try an Episode Group for more seasons)"
-                    if season_num > max_season else ""
-                )
-                log.warning("S%02dE%02d not in episode map — skipped.%s", season_num, ep_num, hint)
-                return (
-                    RenameResult(path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
-                                 status=RenameResult.Status.SKIPPED),
-                    next_auto_special,
-                )
+                # ── Fallback: try matching by original TMDB season/episode ──
+                # When using a TMDB episode group, the group reorganizes episodes
+                # into new seasons. Files may still be named with the original
+                # TMDB numbering (e.g. S01E1100 for One Piece), so we try to
+                # match against the original season/episode mapping.
+                if original_se_map:
+                    info = original_se_map.get((season_num, ep_num))
+                    if info:
+                        log.info(
+                            "S%02dE%02d matched via original TMDB numbering -> S%02dE%02d (%s)",
+                            season_num, ep_num,
+                            info.season, info.episode,
+                            info.title[:50] if info.title else "",
+                        )
+                if not info:
+                    # ── Fallback: try the episode number as an absolute number ──
+                    # Some files use S01EXXXX where XXXX is the absolute episode
+                    # number in the series, not a per-season episode number.
+                    info = episode_map.get(ep_num)
+                    if info:
+                        log.info(
+                            "S%02dE%02d matched via absolute episode number -> S%02dE%02d (%s)",
+                            season_num, ep_num,
+                            info.season, info.episode,
+                            info.title[:50] if info.title else "",
+                        )
+                if not info:
+                    max_season = max((s for s, _ in season_ep_map), default=0)
+                    hint = (
+                        f"  (TMDB only has {max_season} season(s) "
+                        "— try an Episode Group for more seasons)"
+                        if season_num > max_season else ""
+                    )
+                    log.warning("S%02dE%02d not in episode map — skipped.%s", season_num, ep_num, hint)
+                    return (
+                        RenameResult(path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
+                                     status=RenameResult.Status.SKIPPED),
+                        next_auto_special,
+                    )
             return (
                 self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                 next_auto_special,
@@ -872,12 +939,16 @@ class AnimeRenamer:
         new_name = self._format_name(info, path.suffix, season_offsets)
 
         if cfg.organize_into_folders:
-            dest_folder = self._season_folder(info.season) if not dry_run else (
-                cfg.media_dir / (
-                    cfg.specials_folder_name if info.season == 0
-                    else cfg.season_folder_template.format(season=info.season)
-                )
-            )
+            if not dry_run:
+                dest_folder = self._season_folder(info.season)
+            else:
+                if info.season == 0:
+                    folder_name = cfg.specials_folder_name
+                elif cfg.season_arc_names and info.season in cfg.season_arc_names:
+                    folder_name = cfg.season_arc_names[info.season]
+                else:
+                    folder_name = cfg.season_folder_template.format(season=info.season)
+                dest_folder = cfg.media_dir / folder_name
             dest_path = dest_folder / new_name
         else:
             dest_folder = cfg.media_dir
@@ -1160,10 +1231,13 @@ class AnimeRenamer:
 
     def _season_folder(self, season: int) -> Path:
         cfg = self._cfg
-        name = sanitize_name(
-            cfg.specials_folder_name if season == 0
-            else cfg.season_folder_template.format(season=season)
-        )
+        if season == 0:
+            name = sanitize_name(cfg.specials_folder_name)
+        elif cfg.season_arc_names and season in cfg.season_arc_names:
+            # Use arc name if configured, e.g. "East Blue (1-61)"
+            name = sanitize_name(cfg.season_arc_names[season])
+        else:
+            name = sanitize_name(cfg.season_folder_template.format(season=season))
         folder = cfg.media_dir / name
         folder.mkdir(exist_ok=True)
         return folder
