@@ -54,3 +54,5 @@ anidb_titles.dat.gz
 .old
 *.zip
 *.db*
+library_index.json
+*.sqbpro

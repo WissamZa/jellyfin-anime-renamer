@@ -762,6 +762,8 @@ def _auto_import_arc_names_from_group(
 
     try:
         from renamer.providers.tmdb import TMDBFetcher
+        if not cfg.tmdb_series_id:
+            return
         fetcher = TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
 
         data = fetcher._get(
@@ -1483,6 +1485,7 @@ def configure_hook_defaults(cfg: Config) -> None:
             (f"Global Episode Start Mode : {start_mode}", "start_mode"),
             (f"Global Absolute Numbering : {abs_num}", "abs_num"),
             ("Configure Series Overrides (Custom Groups, Names, etc.) -->", "series_overrides"),
+            ("Rebuild Library Index (folder → ID map for hook matching) -->", "rebuild_index"),
             ("<-- Back", "back"),
         ]
         
@@ -1525,6 +1528,64 @@ def configure_hook_defaults(cfg: Config) -> None:
                 save_conf()
         elif action == "series_overrides":
             configure_hook_series_overrides(conf, save_conf)
+        elif action == "rebuild_index":
+            _rebuild_library_index_menu()
+
+
+def _rebuild_library_index_menu() -> None:
+    """
+    Scan BASE_DOWNLOAD_PATH for series folders and rebuild library_index.json
+    from their .series_cache.json files.
+
+    Called from the "Hook Renamer Options" sub-menu.
+    """
+    import os
+    from pathlib import Path
+    from renamer.library_index import LibraryIndex, reset_library_index
+
+    base_path_str = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
+    if not base_path_str:
+        print("\n  BASE_DOWNLOAD_PATH is not set — cannot rebuild library index.")
+        print("  Set it in .env or via the qBit hook settings.")
+        input("  Press Enter to continue …")
+        return
+
+    base_path = Path(base_path_str)
+    if not base_path.is_dir():
+        print(f"\n  BASE_DOWNLOAD_PATH does not exist: {base_path}")
+        input("  Press Enter to continue …")
+        return
+
+    index_path = Path(__file__).resolve().parent.parent.parent / "library_index.json"
+    print(f"\n  Rebuilding library index from: {base_path}")
+    print(f"  Index file: {index_path}\n")
+
+    idx = LibraryIndex(index_path)
+    count = idx.rebuild(base_path)
+
+    # Reset the global singleton so the hook picks up fresh data
+    reset_library_index()
+
+    print(f"\n  Done — {count} series folder(s) indexed.")
+    if count == 0:
+        print("  (No .series_cache.json files found — folders will be added")
+        print("   automatically the next time qbit_hook processes each series.)")
+
+    # Show a summary of what was indexed
+    if count > 0:
+        print("\n  Indexed folders:")
+        for path_str, entry in sorted(idx.entries().items()):
+            ids = []
+            if entry.get("tmdb_id"):
+                ids.append(f"TMDB:{entry['tmdb_id']}")
+            if entry.get("anilist_id"):
+                ids.append(f"AL:{entry['anilist_id']}")
+            if entry.get("kitsu_id"):
+                ids.append(f"Kitsu:{entry['kitsu_id']}")
+            id_str = "  [" + ", ".join(ids) + "]" if ids else "  [no IDs]"
+            print(f"    {entry.get('name', Path(path_str).name)}{id_str}")
+
+    input("\n  Press Enter to continue …")
 
 
 def configure_hook_series_overrides(conf: dict, save_cb) -> None:

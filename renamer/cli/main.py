@@ -122,6 +122,7 @@ def _utilities_menu_options() -> list[tuple[str, str]]:
         ("Clear series cache", "clear_cache"),
         ("Clear AniDB hash cache", "clear_anidb_cache"),
         ("Scan library to SQLite database", "scan_db"),
+        ("Rebuild Library Index (folder → ID map)", "rebuild_index"),
         ("Set folder icon for current series", "set_icon"),
         ("Set folder icons for ALL series (batch)", "batch_set_icons"),
         ("Remove folder icons (batch)", "batch_remove_icons"),
@@ -515,6 +516,8 @@ def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             print("  AniDB hash cache cleared.")
         elif action == "scan_db":
             scan_library_to_db(cfg)
+        elif action == "rebuild_index":
+            menus._rebuild_library_index_menu()
         elif action == "set_icon":
             menus.set_icon_current_folder(cfg)
         elif action == "batch_set_icons":

@@ -35,6 +35,7 @@ import json  # noqa: E402
 from renamer import AnimeRenamer, Config, Provider  # noqa: E402
 from renamer.config import get_logger  # noqa: E402
 from renamer.icons import set_folder_icon  # noqa: E402
+from renamer.library_index import get_library_index  # noqa: E402
 from renamer.providers.registry import get_registry  # noqa: E402
 
 log = get_logger("qbit_hook")
@@ -132,10 +133,19 @@ def find_matching_folder(
     base_path: Path,
     candidates: list[str],
     threshold: float = 0.80,
+    exclude: Path | None = None,
 ) -> Path | None:
     """
     Search base_path for any directory that matches any of the candidate names.
     Returns the matching Path if one is found, else None.
+
+    Parameters
+    ----------
+    exclude:
+        If given, this directory is skipped even if it would otherwise be the
+        best match.  Used to prevent the torrent's own download folder from
+        being selected as the series folder when an existing library folder
+        with a different name (e.g. different capitalisation) also exists.
     """
     if not base_path.exists() or not base_path.is_dir():
         return None
@@ -151,6 +161,8 @@ def find_matching_folder(
     if not normalized_candidates:
         return None
 
+    exclude_resolved = exclude.resolve() if exclude else None
+
     log.debug(
         "Fuzzy folder matching — candidates: %s (normalized: %s)",
         candidates, normalized_candidates,
@@ -161,6 +173,13 @@ def find_matching_folder(
 
     for item in base_path.iterdir():
         if not item.is_dir():
+            continue
+
+        # Skip the torrent's own download folder
+        if exclude_resolved and item.resolve() == exclude_resolved:
+            log.debug(
+                "Fuzzy match: skipping download folder '%s'", item.name
+            )
             continue
 
         dir_name = item.name
@@ -420,6 +439,41 @@ def process_torrent(
         "Processing torrent — hash=%s name=%s", torrent_hash, torrent_name
     )
 
+    # 0. Get current torrent info to identify the download folder.
+    #    qBittorrent places the torrent files in a folder named after the
+    #    torrent (e.g. "ONE PIECE/") before the hook runs.  We must NOT
+    #    treat that freshly-created folder as an existing library folder
+    #    — even if its normalised name matches an existing one perfectly.
+    _tinfo = qbit.torrent_info(torrent_hash)
+    download_folder: Path | None = None
+    if _tinfo:
+        _content = _tinfo.get("content_path", "").strip()
+        _save    = _tinfo.get("save_path",    "").strip()
+        if _content:
+            _cp = Path(_content)
+            # Multi-file torrent: content_path IS the root folder qBit created
+            if _cp.is_dir():
+                try:
+                    _cp.relative_to(BASE_DOWNLOAD_PATH)
+                    download_folder = _cp
+                except ValueError:
+                    pass
+        if not download_folder and _save:
+            _sp = Path(_save)
+            try:
+                # Single-file torrent saved directly in a series-named sub-folder
+                if _sp.resolve() != BASE_DOWNLOAD_PATH.resolve():
+                    _sp.relative_to(BASE_DOWNLOAD_PATH)
+                    download_folder = _sp
+            except ValueError:
+                pass
+
+    if download_folder:
+        log.info(
+            "qBit download folder detected: '%s' (excluded from library matching)",
+            download_folder.name,
+        )
+
     # 1. Resolve the real title from Nyaa
     real_title = lookup_nyaa_title(torrent_hash, torrent_name)
 
@@ -493,25 +547,60 @@ def process_torrent(
     )
 
     # 5. Determine & create the series folder
-    title_en = None
-    title_rom = None
-    try:
-        from renamer.db import _resolve_titles
-        t_en, t_rom, _ = _resolve_titles(official_name, Config.from_env())
-        title_en = t_en
-        title_rom = t_rom
-    except Exception as exc:
-        log.warning("Could not resolve titles for fuzzy matching: %s", exc)
 
-    candidates = [series_name, official_name, title_en, title_rom]
-    matched_folder = find_matching_folder(BASE_DOWNLOAD_PATH, candidates)
-    if matched_folder:
-        series_folder = matched_folder
-        log.info("Found matching existing folder: %s", series_folder)
-    else:
+    # 5a. ID-based lookup via library index (most reliable — works even when
+    #     folder name diverges from torrent name, e.g. "One Piece" vs "ONE PIECE").
+    #     If the index returns the download folder itself, the entry is stale
+    #     (written by a previous bad run) — remove it and fall through.
+    lib_index = get_library_index()
+    series_folder = lib_index.find_by_ids(
+        tmdb_id=tmdb_id,
+        anilist_id=anilist_id,
+        kitsu_id=kitsu_id,
+    )
+    if series_folder:
+        if (
+            download_folder
+            and series_folder.resolve() == download_folder.resolve()
+        ):
+            log.warning(
+                "Library index entry points to the download folder '%s' — "
+                "removing stale entry and falling back to fuzzy match.",
+                series_folder.name,
+            )
+            lib_index.remove(series_folder)
+            lib_index.save()
+            series_folder = None
+        else:
+            log.info("Library index match: %s", series_folder)
+
+    # 5b. Fuzzy name fallback (existing behaviour), excluding the download folder
+    if not series_folder:
+        title_en = None
+        title_rom = None
+        try:
+            from renamer.db import _resolve_titles
+            t_en, t_rom, _ = _resolve_titles(official_name, Config.from_env())
+            title_en = t_en
+            title_rom = t_rom
+        except Exception as exc:
+            log.warning("Could not resolve titles for fuzzy matching: %s", exc)
+
+        candidates: list[str] = [c for c in [series_name, official_name, title_en, title_rom] if c]
+        matched_folder = find_matching_folder(
+            BASE_DOWNLOAD_PATH,
+            candidates,
+            exclude=download_folder,  # never pick the qBit download folder
+        )
+        if matched_folder:
+            series_folder = matched_folder
+            log.info("Found matching existing folder (fuzzy): %s", series_folder)
+
+    # 5c. Create new folder — last resort
+    if not series_folder:
         series_folder = BASE_DOWNLOAD_PATH / sanitize(official_name)
         series_folder.mkdir(parents=True, exist_ok=True)
-        log.info("Series folder: %s", series_folder)
+        log.info("Series folder (new): %s", series_folder)
 
     # 6. Move the torrent's save location in qBit
     log.info("Moving torrent save path to: %s", series_folder)
@@ -553,7 +642,23 @@ def process_torrent(
         done, errors, torrent_hash,
     )
 
-    # ═══ 7.5. Record to backup database ═══
+    # ═══ 7.5. Update library index with resolved IDs ═══
+    try:
+        actual_folder_for_index = cfg.media_dir if cfg.media_dir.exists() else series_folder
+        lib_index = get_library_index()
+        lib_index.update(
+            actual_folder_for_index,
+            official_name,
+            tmdb_id=tmdb_id,
+            anilist_id=anilist_id,
+            kitsu_id=kitsu_id,
+        )
+        lib_index.save()
+        log.info("Library index updated for: %s", actual_folder_for_index.name)
+    except Exception as exc:
+        log.warning("Library index update failed (non-fatal): %s", exc)
+
+    # ═══ 7.6. Record to backup database ═══
     try:
         from renamer.db import (
             AnimeDatabase,
