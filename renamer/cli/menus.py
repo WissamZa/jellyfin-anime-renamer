@@ -1067,7 +1067,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         if cached.get("episode_title_lang"):
             cfg.episode_title_lang = cached["episode_title_lang"]
         if cached.get("season_arc_names"):
-            cfg.season_arc_names = cached["season_arc_names"]
+            cfg.season_arc_names = {int(k): v for k, v in cached["season_arc_names"].items()}
 
     # Show current status
     print(f"  Series name: {cfg.series_name}")
@@ -1351,7 +1351,7 @@ def _apply_new_media_dir(cfg: Config, renamer: AnimeRenamer, new_dir: Path) -> N
         if cached.get("episode_title_lang"):
             cfg.episode_title_lang = cached["episode_title_lang"]
         if cached.get("season_arc_names"):
-            cfg.season_arc_names = cached["season_arc_names"]
+            cfg.season_arc_names = {int(k): v for k, v in cached["season_arc_names"].items()}
         if isinstance(cached.get("provider"), str):
             cfg.provider = Provider.from_str(cached["provider"])
         print(f"  Loaded cache: {cfg.series_name} (TMDB ID: {cfg.tmdb_series_id})")
@@ -1541,6 +1541,7 @@ def _rebuild_library_index_menu() -> None:
     """
     import os
     from pathlib import Path
+
     from renamer.library_index import LibraryIndex, reset_library_index
 
     base_path_str = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
@@ -2102,7 +2103,7 @@ def _backup_scan(db, cfg: Config) -> None:
     from renamer.db import format_size
 
     print(f"\n  {'=' * 60}")
-    print(f"  SCAN RESULTS:")
+    print("  SCAN RESULTS:")
     print(f"    New files to add       : {scan_result.added}")
     print(f"    Existing (complete)    : {scan_result.skipped}  (skipped)")
     print(f"    Existing (needs update): {scan_result.updated}")
@@ -2117,7 +2118,7 @@ def _backup_scan(db, cfg: Config) -> None:
 
     # Preview renamed files
     if scan_result.pending_renames:
-        print(f"\n  -- Renamed Files Preview --")
+        print("\n  -- Renamed Files Preview --")
         for record_id, force_fields, existing in scan_result.pending_renames:
             old_name = existing.get("file_name", "?")
             new_name = force_fields.get("file_name", old_name)
@@ -2133,7 +2134,7 @@ def _backup_scan(db, cfg: Config) -> None:
 
     # Preview new records
     if scan_result.pending_inserts:
-        print(f"\n  -- New Records Preview --")
+        print("\n  -- New Records Preview --")
         for rec in scan_result.pending_inserts:
             title = rec.get("anime_title_rom", "?")
             s = rec.get("season_num")
@@ -2149,10 +2150,10 @@ def _backup_scan(db, cfg: Config) -> None:
 
     # Preview updates
     if scan_result.pending_updates:
-        print(f"\n  -- Updates Preview --")
+        print("\n  -- Updates Preview --")
         for record_id, fields, existing in scan_result.pending_updates:
             print(f"\n  Record #{record_id}: {existing.get('file_name', '?')}")
-            print(f"    WILL ADD (not overwrite):")
+            print("    WILL ADD (not overwrite):")
             for k, v in fields.items():
                 print(f"      {k}: (empty) -> {v}")
 
@@ -2279,7 +2280,7 @@ def _backup_add(db, cfg: Config) -> None:
         **hashes,
     }
 
-    print(f"\n  -- Record Preview --")
+    print("\n  -- Record Preview --")
     for k, v in record.items():
         if v is not None:
             print(f"    {k}: {v}")
@@ -2337,7 +2338,7 @@ def _backup_edit(db) -> None:
                 try:
                     new_val = int(new_val)
                 except ValueError:
-                    print(f"    Invalid number - not changed.")
+                    print("    Invalid number - not changed.")
                     continue
             updates[field] = new_val
 
@@ -2345,7 +2346,7 @@ def _backup_edit(db) -> None:
         print("  No changes.")
         return
 
-    print(f"\n  -- Changes --")
+    print("\n  -- Changes --")
     for k, v in updates.items():
         old = record.get(k)
         print(f"    {k}: {old} -> {v}")
@@ -2384,7 +2385,7 @@ def _backup_delete(db) -> None:
     e = record.get("episode_num")
     ep_str = f" S{s:02d}E{e:02d}" if s and e else ""
 
-    print(f"\n  WARNING: You are about to delete:")
+    print("\n  WARNING: You are about to delete:")
     print(f"    #{rid}  {title}{ep_str}")
     print(f"    File: {fname}")
 
@@ -2489,14 +2490,14 @@ def _backup_stats(db) -> None:
     total_size = format_size(stats["total_size"])
 
     print(f"\n  {'=' * 50}")
-    print(f"  Database Statistics")
+    print("  Database Statistics")
     print(f"  {'=' * 50}")
     print(f"  Total records        : {total}")
     print(f"  Unique series        : {stats['unique_series']}")
     print(f"  Unique groups        : {stats['unique_groups']}")
     print(f"  Total size           : {total_size}")
     print()
-    print(f"  Hash Coverage:")
+    print("  Hash Coverage:")
     print(f"    CRC32  : {stats['crc32_count']}/{total}  ({100*stats['crc32_count']//max(total,1)}%)")
     print(f"    MD5    : {stats['md5_count']}/{total}  ({100*stats['md5_count']//max(total,1)}%)")
     print(f"    SHA1   : {stats['sha1_count']}/{total}  ({100*stats['sha1_count']//max(total,1)}%)")
@@ -2508,7 +2509,7 @@ def _backup_stats(db) -> None:
         print(f"\n  ! {missing_md5} records missing MD5 - run 'Scan folder' to fill")
 
     if stats["top_groups"]:
-        print(f"\n  Top Groups:")
+        print("\n  Top Groups:")
         for name, cnt in stats["top_groups"]:
             print(f"    {name:30s} : {cnt} files")
     print(f"  {'=' * 50}")

@@ -50,6 +50,7 @@ def load_hook_config() -> dict:
             log.warning("Could not read qbit_hook.json: %s", exc)
     return {}
 
+
 HOOK_CONFIG = load_hook_config()
 HOOK_GLOBAL = HOOK_CONFIG.get("global", {})
 HOOK_SERIES = HOOK_CONFIG.get("series", {})
@@ -64,16 +65,18 @@ BASE_DOWNLOAD_PATH = Path(os.getenv("BASE_DOWNLOAD_PATH", "/mnt/D/Torrent"))
 ACTIVE_PROVIDER = Provider.from_str(HOOK_GLOBAL.get("provider", os.getenv("PROVIDER", "tmdb")))
 
 # Default episode start mode (per_season or continuing)
-EPISODE_START_MODE = HOOK_GLOBAL.get("episode_start_mode", os.getenv("EPISODE_START_MODE", "per_season"))
+EPISODE_START_MODE = HOOK_GLOBAL.get(
+    "episode_start_mode", os.getenv("EPISODE_START_MODE", "per_season")
+)
 
 # Use absolute episode numbering (True or False)
-ABSOLUTE_NUMBERING = HOOK_GLOBAL.get("absolute_numbering", os.getenv("ABSOLUTE_NUMBERING", "false").lower() == "true")
+ABSOLUTE_NUMBERING = HOOK_GLOBAL.get(
+    "absolute_numbering", os.getenv("ABSOLUTE_NUMBERING", "false").lower() == "true"
+)
 
 # Regex to extract series name from a typical fansub torrent title:
 # "[SubGroup] Series Name (2024) - 1100 [1080p]"  ->  "Series Name"
-TITLE_PATTERN = re.compile(
-    r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+"
-)
+TITLE_PATTERN = re.compile(r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+")
 
 
 def _parse_optional_int(val: str | None) -> int | None:
@@ -88,12 +91,12 @@ def _parse_optional_int(val: str | None) -> int | None:
 
 def sanitize(name: str) -> str:
     """Remove characters invalid in filenames / problematic for Jellyfin."""
-    cleaned = re.sub(r'[\\/:*?"<>|;]', '', name)
+    cleaned = re.sub(r'[\\/:*?"<>|;]', "", name)
     # Normalise unicode dashes and ellipsis
-    cleaned = cleaned.replace('\u2014', '-').replace('\u2013', '-')
-    cleaned = cleaned.replace('\u2026', '...')
-    cleaned = re.sub(r'[\u00a0\u2000-\u200b\u2028\u2029\u3000]', ' ', cleaned)
-    cleaned = re.sub(r' {2,}', ' ', cleaned).strip(' .-_')
+    cleaned = cleaned.replace("\u2014", "-").replace("\u2013", "-")
+    cleaned = cleaned.replace("\u2026", "...")
+    cleaned = re.sub(r"[\u00a0\u2000-\u200b\u2028\u2029\u3000]", " ", cleaned)
+    cleaned = re.sub(r" {2,}", " ", cleaned).strip(" .-_")
     return cleaned
 
 
@@ -165,7 +168,8 @@ def find_matching_folder(
 
     log.debug(
         "Fuzzy folder matching — candidates: %s (normalized: %s)",
-        candidates, normalized_candidates,
+        candidates,
+        normalized_candidates,
     )
 
     best_match: Path | None = None
@@ -177,9 +181,7 @@ def find_matching_folder(
 
         # Skip the torrent's own download folder
         if exclude_resolved and item.resolve() == exclude_resolved:
-            log.debug(
-                "Fuzzy match: skipping download folder '%s'", item.name
-            )
+            log.debug("Fuzzy match: skipping download folder '%s'", item.name)
             continue
 
         dir_name = item.name
@@ -197,7 +199,9 @@ def find_matching_folder(
     if best_score >= threshold and best_match:
         log.info(
             "Fuzzy folder match found: '%s' matches with similarity %.0f%% (threshold %.0f%%)",
-            best_match.name, best_score * 100, threshold * 100,
+            best_match.name,
+            best_score * 100,
+            threshold * 100,
         )
         return best_match
 
@@ -223,7 +227,8 @@ class QBitClient:
             if r.status_code not in (200, 204):
                 log.error(
                     "qBit login failed — status %s: %s",
-                    r.status_code, r.text,
+                    r.status_code,
+                    r.text,
                 )
                 sys.exit(1)
             log.info("Logged into qBittorrent at %s", self._url)
@@ -242,9 +247,7 @@ class QBitClient:
             log.error("setLocation failed — status %s", r.status_code)
         return ok
 
-    def rename_file(
-        self, torrent_hash: str, old_path: str, new_path: str
-    ) -> bool:
+    def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> bool:
         """Rename a single file inside a torrent."""
         r = self._s.post(
             f"{self._url}/api/v2/torrents/renameFile",
@@ -258,7 +261,9 @@ class QBitClient:
         if not ok:
             log.error(
                 "renameFile failed — status %s | %s -> %s",
-                r.status_code, old_path, new_path,
+                r.status_code,
+                old_path,
+                new_path,
             )
         return ok
 
@@ -302,9 +307,7 @@ class QBitClient:
                 return []
             sorted_torrents = sorted(
                 completed,
-                key=lambda t: max(
-                    t.get("completion_on", 0), t.get("added_on", 0)
-                ),
+                key=lambda t: max(t.get("completion_on", 0), t.get("added_on", 0)),
                 reverse=True,
             )
             return sorted_torrents[:limit]
@@ -325,6 +328,7 @@ def lookup_nyaa_title(torrent_hash: str, fallback: str) -> str:
             timeout=10,
         )
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(r.text, "html.parser")
         if soup.h3:
             title = soup.h3.text.strip()
@@ -369,9 +373,7 @@ def build_qbit_renamer(
     for file moves instead of os.rename(), so seeding is never interrupted.
     """
     _tracked: list[dict] = qbit.get_files(torrent_hash)
-    log.info(
-        "qBit is tracking %d file(s) for this torrent.", len(_tracked)
-    )
+    log.info("qBit is tracking %d file(s) for this torrent.", len(_tracked))
     for f in _tracked:
         log.debug("  tracked: %s", f["name"])
 
@@ -406,9 +408,7 @@ def build_qbit_renamer(
 
         ok = qbit.rename_file(torrent_hash, old_rel_str, new_rel_str)
         if not ok:
-            raise RuntimeError(
-                f"qBit renameFile failed: {old_rel_str} -> {new_rel_str}"
-            )
+            raise RuntimeError(f"qBit renameFile failed: {old_rel_str} -> {new_rel_str}")
 
         time.sleep(0.5)
         _refresh_tracked()
@@ -418,9 +418,7 @@ def build_qbit_renamer(
         log.info("qBit setLocation: %s -> %s", old_path, new_path)
         ok = qbit.set_location(torrent_hash, str(new_path))
         if not ok:
-            raise RuntimeError(
-                f"qBit setLocation failed: {old_path} -> {new_path}"
-            )
+            raise RuntimeError(f"qBit setLocation failed: {old_path} -> {new_path}")
         time.sleep(2)
 
     return AnimeRenamer(
@@ -431,13 +429,9 @@ def build_qbit_renamer(
 
 
 # ══════════════════════════ MAIN ═════════════════════════
-def process_torrent(
-    qbit: QBitClient, torrent_hash: str, torrent_name: str
-) -> None:
+def process_torrent(qbit: QBitClient, torrent_hash: str, torrent_name: str) -> None:
     log.info("=" * 60)
-    log.info(
-        "Processing torrent — hash=%s name=%s", torrent_hash, torrent_name
-    )
+    log.info("Processing torrent — hash=%s name=%s", torrent_hash, torrent_name)
 
     # 0. Get current torrent info to identify the download folder.
     #    qBittorrent places the torrent files in a folder named after the
@@ -448,7 +442,7 @@ def process_torrent(
     download_folder: Path | None = None
     if _tinfo:
         _content = _tinfo.get("content_path", "").strip()
-        _save    = _tinfo.get("save_path",    "").strip()
+        _save = _tinfo.get("save_path", "").strip()
         if _content:
             _cp = Path(_content)
             # Multi-file torrent: content_path IS the root folder qBit created
@@ -518,7 +512,14 @@ def process_torrent(
         provider = Provider.from_str(series_conf["provider"])
 
     should_search = True
-    if provider == Provider.TMDB and tmdb_id or provider == Provider.AniList and anilist_id or provider == Provider.Kitsu and kitsu_id:
+    if (
+        provider == Provider.TMDB
+        and tmdb_id
+        or provider == Provider.AniList
+        and anilist_id
+        or provider == Provider.Kitsu
+        and kitsu_id
+    ):
         should_search = False
 
     if should_search:
@@ -537,13 +538,14 @@ def process_torrent(
             elif provider == Provider.Kitsu and search_result.series_id:
                 kitsu_id = search_result.series_id
         else:
-            log.warning(
-                "Provider search returned nothing for '%s'.", series_name
-            )
+            log.warning("Provider search returned nothing for '%s'.", series_name)
 
     log.info(
         "Series: '%s' | TMDB=%s AniList=%s Kitsu=%s",
-        official_name, tmdb_id, anilist_id, kitsu_id,
+        official_name,
+        tmdb_id,
+        anilist_id,
+        kitsu_id,
     )
 
     # 5. Determine & create the series folder
@@ -559,10 +561,7 @@ def process_torrent(
         kitsu_id=kitsu_id,
     )
     if series_folder:
-        if (
-            download_folder
-            and series_folder.resolve() == download_folder.resolve()
-        ):
+        if download_folder and series_folder.resolve() == download_folder.resolve():
             log.warning(
                 "Library index entry points to the download folder '%s' — "
                 "removing stale entry and falling back to fuzzy match.",
@@ -580,6 +579,7 @@ def process_torrent(
         title_rom = None
         try:
             from renamer.db import _resolve_titles
+
             t_en, t_rom, _ = _resolve_titles(official_name, Config.from_env())
             title_en = t_en
             title_rom = t_rom
@@ -613,7 +613,9 @@ def process_torrent(
     # Resolve local episode start mode and absolute numbering options
     ep_start_mode = series_conf.get("episode_start_mode", EPISODE_START_MODE)
     abs_numbering = series_conf.get("absolute_numbering", ABSOLUTE_NUMBERING)
-    ep_group_id = series_conf.get("episode_group_id") or os.getenv("EPISODE_GROUP_ID", "").strip() or None
+    ep_group_id = (
+        series_conf.get("episode_group_id") or os.getenv("EPISODE_GROUP_ID", "").strip() or None
+    )
 
     # 7. Rename & organise via the renamer
     cfg = Config.from_env(
@@ -639,7 +641,9 @@ def process_torrent(
 
     log.info(
         "Done — renamed %d file(s), %d error(s) | hash=%s",
-        done, errors, torrent_hash,
+        done,
+        errors,
+        torrent_hash,
     )
 
     # ═══ 7.5. Update library index with resolved IDs ═══
@@ -662,10 +666,12 @@ def process_torrent(
     try:
         from renamer.db import (
             AnimeDatabase,
+            _resolve_titles,
             compute_hashes_fast,
             extract_crc32_from_filename,
+        )
+        from renamer.db import (
             extract_group_name as extract_group_from_name,
-            _resolve_titles,
         )
         from renamer.parsers import EpisodeNumberParser
 
@@ -712,7 +718,9 @@ def process_torrent(
                         need_ed2k = "ed2k" in missing
                         need_sha1 = "sha1" in missing or "md5" in missing
                         hashes = compute_hashes_fast(
-                            file_path, need_sha1=need_sha1, need_ed2k=need_ed2k,
+                            file_path,
+                            need_sha1=need_sha1,
+                            need_ed2k=need_ed2k,
                         )
                         update_fields = {k: v for k, v in hashes.items() if k in missing}
                         if update_fields:
@@ -815,9 +823,7 @@ def main() -> None:
             idx = sys.argv.index("-n")
             n_limit = int(sys.argv[idx + 1])
         except (ValueError, IndexError):
-            log.error(
-                "Invalid -n argument value. Usage: python qbit_hook.py -n <number>"
-            )
+            log.error("Invalid -n argument value. Usage: python qbit_hook.py -n <number>")
             sys.exit(1)
 
     if target_hash:
@@ -835,9 +841,7 @@ def main() -> None:
         )
         targets = qbit.get_last_completed_torrents(limit)
         if not targets:
-            log.error(
-                "Could not find any completed torrents in qBittorrent."
-            )
+            log.error("Could not find any completed torrents in qBittorrent.")
             sys.exit(1)
 
         log.info("Found %d completed torrent(s) to process.", len(targets))

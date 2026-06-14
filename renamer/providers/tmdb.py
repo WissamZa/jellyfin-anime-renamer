@@ -414,6 +414,27 @@ class TMDBFetcher(EpisodeFetcher):
                     return start
             return None
 
+        # Check if the episode group uses absolute numbering in its episode_number fields.
+        # We do this by checking if any non-special group (season_num > 0) has its first episode
+        # starting at an episode number other than 1.
+        has_absolute_group_nums = False
+        non_special_groups = []
+        for g in groups:
+            gname = g.get("name", "")
+            if re.search(r"\bspecials?\b", gname, re.IGNORECASE):
+                continue
+            eps = g.get("episodes", [])
+            if {ep.get("season_number", -1) for ep in eps} == {0}:
+                continue
+            non_special_groups.append(g)
+
+        if len(non_special_groups) > 1:
+            for g in non_special_groups[1:]:
+                eps = g.get("episodes", [])
+                if eps and eps[0].get("episode_number", 0) > 1:
+                    has_absolute_group_nums = True
+                    break
+
         for group in groups:
             episodes = group.get("episodes", [])
             gname = group.get("name", "").strip()
@@ -472,14 +493,17 @@ class TMDBFetcher(EpisodeFetcher):
 
                 # Compute the actual absolute episode number.
                 # Strategy:
-                #   1. If the group has a range AND orig_ep looks like an
+                #   1. If the group uses absolute numbering generally, use orig_ep directly.
+                #   2. If the group has a range AND orig_ep looks like an
                 #      absolute number (orig_ep >= group_abs_start), use
                 #      orig_ep directly.  This handles shows like One Piece
                 #      where TMDB stores absolute episode numbers.
-                #   2. If the group has a range but orig_ep is per-season
+                #   3. If the group has a range but orig_ep is per-season
                 #      (small number), use group_abs_start + position.
-                #   3. If no range, fall back to the sequential counter.
-                if group_abs_start is not None:
+                #   4. If no range, fall back to the sequential counter.
+                if has_absolute_group_nums:
+                    actual_abs = orig_ep
+                elif group_abs_start is not None:
                     if orig_ep >= group_abs_start:
                         # orig_ep is an absolute episode number — use it
                         # directly.  This correctly handles extra episodes

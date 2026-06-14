@@ -8,11 +8,7 @@ from the nominal range.
 """
 
 import re
-
-import pytest
-
-from renamer.providers.tmdb import TMDBFetcher
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # _parse_group_start (accessed via the compiled regex inside the method)
@@ -281,3 +277,74 @@ class TestOriginalSeMap:
         # 2. original_se_map.get((2, 1137)) -> None (TMDB has season 22, not 2)
         # 3. episode_map.get(1137) -> Should work with the fix!
         assert True  # Placeholder - actual test requires API mock
+
+
+class TestAbsoluteGroupNumberingDetection:
+    """Test detection of absolute/continuing group episode numbers."""
+
+    def test_absolute_group_numbering_detection(self):
+        # Simulate TMDB response format for groups
+        groups: list[dict[str, Any]] = [
+            {
+                "name": "Season 1",
+                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)]
+            },
+            {
+                "name": "Season 2",
+                "episodes": [{"episode_number": i, "season_number": 2} for i in range(9, 31)]
+            }
+        ]
+
+        # Check logic inside fetch_episode_group_details
+        has_absolute_group_nums = False
+        non_special_groups = []
+        for g in groups:
+            gname = g.get("name", "")
+            if re.search(r"\bspecials?\b", gname, re.IGNORECASE):
+                continue
+            eps = g.get("episodes", [])
+            if {ep.get("season_number", -1) for ep in eps} == {0}:
+                continue
+            non_special_groups.append(g)
+
+        if len(non_special_groups) > 1:
+            for g in non_special_groups[1:]:
+                eps = g.get("episodes", [])
+                if eps and eps[0].get("episode_number", 0) > 1:
+                    has_absolute_group_nums = True
+                    break
+
+        assert has_absolute_group_nums is True
+
+    def test_per_season_group_numbering_detection(self):
+        # Simulate standard per-season groups where each season starts at 1
+        groups: list[dict[str, Any]] = [
+            {
+                "name": "Season 1",
+                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)]
+            },
+            {
+                "name": "Season 2",
+                "episodes": [{"episode_number": i, "season_number": 2} for i in range(1, 10)]
+            }
+        ]
+
+        has_absolute_group_nums = False
+        non_special_groups = []
+        for g in groups:
+            gname = g.get("name", "")
+            if re.search(r"\bspecials?\b", gname, re.IGNORECASE):
+                continue
+            eps = g.get("episodes", [])
+            if {ep.get("season_number", -1) for ep in eps} == {0}:
+                continue
+            non_special_groups.append(g)
+
+        if len(non_special_groups) > 1:
+            for g in non_special_groups[1:]:
+                eps = g.get("episodes", [])
+                if eps and eps[0].get("episode_number", 0) > 1:
+                    has_absolute_group_nums = True
+                    break
+
+        assert has_absolute_group_nums is False

@@ -406,7 +406,7 @@ class AnimeRenamer:
         if data.get("episode_title_lang"):
             cfg.episode_title_lang = data["episode_title_lang"]
         if data.get("season_arc_names"):
-            cfg.season_arc_names = data["season_arc_names"]
+            cfg.season_arc_names = {int(k): v for k, v in data["season_arc_names"].items()}
 
     def _save_cache(self) -> None:
         cfg = self._cfg
@@ -785,14 +785,30 @@ class AnimeRenamer:
             if sp_num == 0:
                 sp_num = next_auto_special
                 next_auto_special += 1
-            info = specials_map.get(sp_num) or EpisodeInfo(
-                absolute=sp_num,
-                season=0,
-                episode=sp_num,
-                title=_clean_special_title(path.stem),
-                source="filename",
-                is_special=True,
-            )
+            info = specials_map.get(sp_num)
+            
+            # Title similarity validation/override for specials
+            suffix = _extract_title_suffix(path.name)
+            if suffix:
+                matches = _find_all_title_matches(suffix, specials_map)
+                title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, sp_num)
+                if title_info:
+                    if info and info != title_info:
+                        log.info(
+                            "Special %d title mismatch (numeric matched: %r, title matched: %r) — overriding with title match",
+                            sp_num, info.title, title_info.title
+                        )
+                    info = title_info
+
+            if not info:
+                info = EpisodeInfo(
+                    absolute=sp_num,
+                    season=0,
+                    episode=sp_num,
+                    title=_clean_special_title(path.stem),
+                    source="filename",
+                    is_special=True,
+                )
             return (
                 self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                 next_auto_special,
@@ -803,11 +819,27 @@ class AnimeRenamer:
         if season_num is not None and ep_num is not None:
             if season_num == 0:
                 # S00Exx — look up in specials map
-                info = specials_map.get(ep_num) or EpisodeInfo(
-                    absolute=ep_num, season=0, episode=ep_num,
-                    title=_clean_special_title(path.stem),
-                    source="filename", is_special=True,
-                )
+                info = specials_map.get(ep_num)
+                
+                # Title similarity validation/override for specials
+                suffix = _extract_title_suffix(path.name)
+                if suffix:
+                    matches = _find_all_title_matches(suffix, specials_map)
+                    title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, ep_num)
+                    if title_info:
+                        if info and info != title_info:
+                            log.info(
+                                "S00E%02d title mismatch (numeric matched: %r, title matched: %r) — overriding with title match",
+                                ep_num, info.title, title_info.title
+                            )
+                        info = title_info
+
+                if not info:
+                    info = EpisodeInfo(
+                        absolute=ep_num, season=0, episode=ep_num,
+                        title=_clean_special_title(path.stem),
+                        source="filename", is_special=True,
+                    )
                 return (
                     self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                     next_auto_special,
@@ -841,19 +873,47 @@ class AnimeRenamer:
                             info.season, info.episode,
                             info.title[:50] if info.title else "",
                         )
-                if not info:
-                    max_season = max((s for s, _ in season_ep_map), default=0)
-                    hint = (
-                        f"  (TMDB only has {max_season} season(s) "
-                        "— try an Episode Group for more seasons)"
-                        if season_num > max_season else ""
-                    )
-                    log.warning("S%02dE%02d not in episode map — skipped.%s", season_num, ep_num, hint)
-                    return (
-                        RenameResult(path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
-                                     status=RenameResult.Status.SKIPPED),
-                        next_auto_special,
-                    )
+
+            # Title similarity validation/override for SxxExx
+            suffix = _extract_title_suffix(path.name)
+            if suffix:
+                matches = _find_all_title_matches(suffix, episode_map)
+                title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, ep_num)
+                if not title_info:
+                    matches = _find_all_title_matches(suffix, specials_map)
+                    title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, ep_num)
+                
+                if title_info:
+                    if info and info != title_info:
+                        log.info(
+                            "S%02dE%02d title mismatch (numeric matched: %r, title matched: %r) — overriding with title match",
+                            season_num, ep_num, info.title, title_info.title
+                        )
+                    info = title_info
+
+            if not info:
+                # Last resort: try matching suffix by title without episode number
+                matches = _find_all_title_matches(suffix or path.stem, episode_map)
+                title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, ep_num)
+                if not title_info:
+                    matches = _find_all_title_matches(suffix or path.stem, specials_map)
+                    title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, ep_num)
+                if title_info:
+                    info = title_info
+
+            if not info:
+                max_season = max((s for s, _ in season_ep_map), default=0)
+                hint = (
+                    f"  (TMDB only has {max_season} season(s) "
+                    "— try an Episode Group for more seasons)"
+                    if season_num > max_season else ""
+                )
+                log.warning("S%02dE%02d not in episode map — skipped.%s", season_num, ep_num, hint)
+                return (
+                    RenameResult(path.name, "", EpisodeInfo(0, season_num, ep_num, ""),
+                                 status=RenameResult.Status.SKIPPED),
+                    next_auto_special,
+                )
             return (
                 self._handle_file(path, info, dry_run, season_offsets, session_history, claimed_dests),
                 next_auto_special,
@@ -862,6 +922,20 @@ class AnimeRenamer:
         # ── Absolute number fallback ──────────────────────────
         abs_num = self._ep_parser.parse(path.name)
         if abs_num is None:
+            # Try title matching before hash fallback if filename has a title suffix
+            suffix = _extract_title_suffix(path.name) or path.stem
+            if suffix:
+                matches = _find_all_title_matches(suffix, episode_map)
+                title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, None)
+                if not title_info:
+                    matches = _find_all_title_matches(suffix, specials_map)
+                    title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, None)
+                if title_info:
+                    return (
+                        self._handle_file(path, title_info, dry_run, season_offsets, session_history, claimed_dests),
+                        next_auto_special,
+                    )
+
             # ── ED2K hash fallback (when --use-hash is enabled) ────
             if self._cfg.use_hash:
                 hash_info = self._lookup_by_hash(path)
@@ -901,6 +975,24 @@ class AnimeRenamer:
             )
 
         info = episode_map.get(abs_num)
+        
+        # Title similarity validation/override for absolute numbers
+        suffix = _extract_title_suffix(path.name)
+        if suffix:
+            matches = _find_all_title_matches(suffix, episode_map)
+            title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, abs_num)
+            if not title_info:
+                matches = _find_all_title_matches(suffix, specials_map)
+                title_info = self._select_best_candidate(matches, path, season_offsets, claimed_dests, abs_num)
+            
+            if title_info:
+                if info and info != title_info:
+                    log.info(
+                        "Absolute %d title mismatch (numeric matched: %r, title matched: %r) — overriding with title match",
+                        abs_num, info.title, title_info.title
+                    )
+                info = title_info
+
         if not info:
             # ── ED2K hash fallback for episode not in map ────────
             if self._cfg.use_hash:
@@ -1172,6 +1264,50 @@ class AnimeRenamer:
             log.error("Failed to rename folder: %s", exc)
             return False
 
+    def _get_dest_path(self, info: EpisodeInfo, new_name: str) -> Path:
+        cfg = self._cfg
+        if cfg.organize_into_folders:
+            if info.season == 0:
+                folder_name = cfg.specials_folder_name
+            elif cfg.season_arc_names and info.season in cfg.season_arc_names:
+                folder_name = cfg.season_arc_names[info.season]
+            else:
+                folder_name = cfg.season_folder_template.format(season=info.season)
+            dest_folder = cfg.media_dir / folder_name
+        else:
+            dest_folder = cfg.media_dir
+        return (dest_folder / new_name).resolve()
+
+    def _select_best_candidate(
+        self,
+        matches: list[tuple[EpisodeInfo, float]],
+        path: Path,
+        season_offsets: dict[int, int],
+        claimed_dests: set[Path],
+        parsed_ep_num: int | None = None,
+    ) -> EpisodeInfo | None:
+        if not matches:
+            return None
+
+        if len(matches) == 1:
+            return matches[0][0]
+
+        candidates = []
+        for ep, ratio in matches:
+            dist = abs(ep.absolute - parsed_ep_num) if parsed_ep_num is not None else 0
+            candidates.append((ep, ratio, dist))
+
+        # Sort by: ratio descending, distance ascending
+        candidates.sort(key=lambda x: (x[1], -x[2]), reverse=True)
+
+        for ep, _, _ in candidates:
+            new_name = self._format_name(ep, path.suffix, season_offsets)
+            dest_path = self._get_dest_path(ep, new_name)
+            if dest_path not in claimed_dests:
+                return ep
+
+        return candidates[0][0]
+
     def _log_rename(
         self,
         info: EpisodeInfo,
@@ -1250,25 +1386,128 @@ class AnimeRenamer:
         Build a dict mapping season number -> episode count offset for
         "continuing" mode.
 
-        Example: if S1 has 12 eps and S2 has 25:
-            {1: 0, 2: 12, 3: 37}
+        Uses base-relative start positions for each season to robustly
+        handle specials, custom start offsets, and numbering gaps.
         """
-        counts: dict[int, int] = {}
+        seasons: dict[int, list[EpisodeInfo]] = {}
         for ep in episode_map.values():
             if ep.season > 0:
-                counts[ep.season] = max(counts.get(ep.season, 0), ep.episode)
+                seasons.setdefault(ep.season, []).append(ep)
+
+        if not seasons:
+            return {}
+
+        base_abs = min(ep.absolute for eps in seasons.values() for ep in eps)
 
         offsets: dict[int, int] = {}
-        running = 0
-        for sn in sorted(counts):
-            offsets[sn] = running
-            running += counts[sn]
+        for sn, eps in seasons.items():
+            min_abs = min(ep.absolute for ep in eps)
+            min_ep = min(ep.episode for ep in eps)
+            offsets[sn] = max(0, (min_abs - base_abs) - (min_ep - 1))
         return offsets
 
 
 # ---------------------------------------------------------------------------
 # Module-level helpers (stateless, testable)
 # ---------------------------------------------------------------------------
+
+
+def _normalize_title(text: str) -> str:
+    """
+    Normalize string titles (lowercase, alphanumeric characters only)
+    for safe matching.
+    """
+    text = re.sub(r"\[[^\]]*\]", "", text)
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]", "", text).lower()
+    return text
+
+
+def _extract_title_suffix(filename: str) -> str:
+    """
+    Extract the title suffix from a filename by stripping out prefix noise
+    (such as the series name and parsed season/episode patterns).
+    """
+    from renamer.parsers import EpisodeNumberParser
+    stem = Path(filename).stem
+    for pattern in EpisodeNumberParser.SEASON_EP_PATTERNS:
+        m = pattern.search(stem)
+        if m:
+            suffix = stem[m.end():].strip()
+            suffix = re.sub(r"^[\s\-–_~.]+", "", suffix).strip()
+            return suffix
+            
+    for _label, pattern in EpisodeNumberParser.PATTERNS:
+        m = re.search(pattern, stem, re.IGNORECASE)
+        if m:
+            suffix = stem[m.end():].strip()
+            suffix = re.sub(r"^[\s\-–_~.]+", "", suffix).strip()
+            return suffix
+            
+    return ""
+
+
+def _find_all_title_matches(suffix: str, search_map: dict[int, EpisodeInfo]) -> list[tuple[EpisodeInfo, float]]:
+    """
+    Find all matching episodes in search_map with ratio >= 0.85,
+    sorted by ratio descending.
+    """
+    import difflib
+    norm_suffix = _normalize_title(suffix)
+    if not norm_suffix or len(norm_suffix) < 4:
+        return []
+
+    matches = []
+    seen_ids = set()
+
+    for ep in search_map.values():
+        if id(ep) in seen_ids:
+            continue
+        seen_ids.add(id(ep))
+        
+        if not ep.title:
+            continue
+        norm_ep_title = _normalize_title(ep.title)
+        if not norm_ep_title:
+            continue
+
+        if norm_suffix == norm_ep_title:
+            matches.append((ep, 1.0))
+            continue
+
+        len_suffix = len(norm_suffix)
+        len_ep = len(norm_ep_title)
+        max_possible = (2.0 * min(len_suffix, len_ep)) / (len_suffix + len_ep)
+        if max_possible < 0.80 and not (
+            (norm_suffix in norm_ep_title or norm_ep_title in norm_suffix)
+            and min(len_suffix, len_ep) >= 8
+        ):
+            continue
+
+        ratio = difflib.SequenceMatcher(None, norm_suffix, norm_ep_title).ratio()
+
+        if ratio < 0.85 and (
+            (norm_suffix in norm_ep_title or norm_ep_title in norm_suffix)
+            and min(len_suffix, len_ep) >= 8
+        ):
+            ratio = max(ratio, 0.85)
+
+        if ratio >= 0.85:
+            matches.append((ep, ratio))
+
+    # Sort by ratio descending
+    matches.sort(key=lambda x: x[1], reverse=True)
+    return matches
+
+
+def _find_best_title_match(suffix: str, search_map: dict[int, EpisodeInfo]) -> tuple[EpisodeInfo | None, float]:
+    """
+    Find the best title-matching episode in search_map using SequenceMatcher.
+    """
+    matches = _find_all_title_matches(suffix, search_map)
+    if matches:
+        return matches[0]
+    return None, 0.0
 
 
 def _get_base_download_path() -> Path | None:

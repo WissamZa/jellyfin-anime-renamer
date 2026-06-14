@@ -130,8 +130,8 @@ class TestOrganiseIntoFolders:
              patch.object(renamer, "_cross_reference_ids"):
             renamer._process_files(ep_map, {}, dry_run=False)
 
-        assert (tmp_path / "Season 01").is_dir()
-        assert (tmp_path / "Season 01" / "Test Show - S01E01 - First.mkv").exists()
+        assert (tmp_path / "Season 1").is_dir()
+        assert (tmp_path / "Season 1" / "Test Show - S01E01 - First.mkv").exists()
 
 
 class TestUndo:

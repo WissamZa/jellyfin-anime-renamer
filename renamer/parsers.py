@@ -93,7 +93,12 @@ class SpecialParser:
             all_keywords = all_keywords + extra_named_specials
 
         for keyword in all_keywords:
-            if re.search(re.escape(keyword), stem, re.IGNORECASE):
+            pattern = re.escape(keyword)
+            if keyword and keyword[0].isalnum():
+                pattern = r"\b" + pattern
+            if keyword and keyword[-1].isalnum():
+                pattern = pattern + r"\b"
+            if re.search(pattern, stem, re.IGNORECASE):
                 return 0
 
         return None
