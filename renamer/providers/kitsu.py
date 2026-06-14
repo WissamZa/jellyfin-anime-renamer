@@ -106,11 +106,13 @@ class KitsuFetcher(EpisodeFetcher):
             if not anime_data:
                 break
 
-            chain.append({
-                "id": int(anime_data["id"]),
-                "attributes": anime_data.get("attributes", {}),
-                "season_index": season_idx,
-            })
+            chain.append(
+                {
+                    "id": int(anime_data["id"]),
+                    "attributes": anime_data.get("attributes", {}),
+                    "season_index": season_idx,
+                }
+            )
             season_idx += 1
 
             # Find next sequel
@@ -119,7 +121,8 @@ class KitsuFetcher(EpisodeFetcher):
 
         log.info(
             "Kitsu sequel chain: %d anime(s) starting from id=%d",
-            len(chain), start_id,
+            len(chain),
+            start_id,
         )
         return chain
 
@@ -142,23 +145,15 @@ class KitsuFetcher(EpisodeFetcher):
             item_type = item.get("type")
             if item_type == "anime":
                 # Check if this item's prequel is our current anime
-                prequels = (
-                    item.get("relationships", {})
-                    .get("prequels", {})
-                    .get("data", [])
-                )
+                prequels = item.get("relationships", {}).get("prequels", {}).get("data", [])
                 for prequel in prequels:
-                    if int(prequel.get("id", 0)) == int(
-                        data.get("data", {}).get("id", 0)
-                    ):
+                    if int(prequel.get("id", 0)) == int(data.get("data", {}).get("id", 0)):
                         return int(item["id"])
 
         return None
 
     # ── Episode fetching per anime ─────────────────────────
-    def _fetch_episodes_for_anime(
-        self, kitsu_id: int
-    ) -> list[dict[str, Any]]:
+    def _fetch_episodes_for_anime(self, kitsu_id: int) -> list[dict[str, Any]]:
         """Fetch all episodes for a single Kitsu anime (paginated)."""
         episodes: list[dict[str, Any]] = []
         offset = 0
@@ -213,7 +208,9 @@ class KitsuFetcher(EpisodeFetcher):
 
             log.info(
                 "Kitsu season %d: anime id=%d (%d episodes)",
-                season_num, anime_id, ep_count,
+                season_num,
+                anime_id,
+                ep_count,
             )
 
             # Fetch episodes for this anime
@@ -234,9 +231,7 @@ class KitsuFetcher(EpisodeFetcher):
             # Sort episodes by number
             ep_list = sorted(
                 raw_episodes,
-                key=lambda e: (
-                    e.get("attributes", {}).get("number") or 0
-                ),
+                key=lambda e: e.get("attributes", {}).get("number") or 0,
             )
 
             for raw_ep in ep_list:

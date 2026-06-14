@@ -94,16 +94,18 @@ class AniListFetcher(EpisodeFetcher):
         native = titles.get("native")
         log.info(
             "AniList title lookup '%s' -> id=%s romaji='%s' english='%s' native='%s'",
-            name, self._id, romaji, english, native,
+            name,
+            self._id,
+            romaji,
+            english,
+            native,
         )
         return romaji or english
 
     def fetch(self) -> dict[int, EpisodeInfo] | None:
         if not self._id:
             return None
-        log.info(
-            "AniList — fetching episode titles for id=%d …", self._id
-        )
+        log.info("AniList — fetching episode titles for id=%d …", self._id)
         media = self._gql(self.EPISODES_QUERY, {"id": self._id})
         if not media:
             return None

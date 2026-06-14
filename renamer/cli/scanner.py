@@ -31,8 +31,7 @@ def scan_library_to_db(cfg: Config) -> None:
     # Collect all media files recursively (video + subtitles)
     media_exts = cfg.all_media_extensions
     files = sorted(
-        p for p in cfg.media_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in media_exts
+        p for p in cfg.media_dir.rglob("*") if p.is_file() and p.suffix.lower() in media_exts
     )
 
     # Separate video and subtitle files for different processing
@@ -215,6 +214,7 @@ def scan_library_to_db(cfg: Config) -> None:
     # Scan subtitle files and insert into subtitles table
     subtitle_count = 0
     from renamer.subtitles import _split_subtitle_stem
+
     for f in subtitle_files:
         try:
             rel = f.relative_to(cfg.media_dir)

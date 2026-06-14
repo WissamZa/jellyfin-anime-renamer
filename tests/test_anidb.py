@@ -22,10 +22,10 @@ from renamer.providers.anidb import (
 )
 from renamer.providers.anidb_cache import AniDBCache, AniDBFileInfo
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_info(**kwargs) -> AniDBFileInfo:
     """Return an AniDBFileInfo with sensible defaults, overridable via kwargs."""
@@ -70,17 +70,21 @@ def client() -> AniDBClient:
 # _looks_like_hash
 # ---------------------------------------------------------------------------
 
+
 class TestLooksLikeHash:
-    @pytest.mark.parametrize("s,expected", [
-        ("abcdef1234567890abcdef1234567890", True),   # pure hex MD5-length
-        ("DEADBEEFCAFE1234DEAD", True),                # uppercase hex
-        ("Shingeki no Kyojin", False),                 # normal title
-        ("1080p", False),                              # short
-        ("Attack on Titan", False),                    # mixed
-        ("", False),                                   # empty
-        ("abc", False),                                # too short
-        ("g1h2i3j4k5l6m7n8", False),                  # non-hex chars > 20 %
-    ])
+    @pytest.mark.parametrize(
+        "s,expected",
+        [
+            ("abcdef1234567890abcdef1234567890", True),  # pure hex MD5-length
+            ("DEADBEEFCAFE1234DEAD", True),  # uppercase hex
+            ("Shingeki no Kyojin", False),  # normal title
+            ("1080p", False),  # short
+            ("Attack on Titan", False),  # mixed
+            ("", False),  # empty
+            ("abc", False),  # too short
+            ("g1h2i3j4k5l6m7n8", False),  # non-hex chars > 20 %
+        ],
+    )
     def test_hash_detection(self, s: str, expected: bool):
         assert _looks_like_hash(s) is expected
 
@@ -88,6 +92,7 @@ class TestLooksLikeHash:
 # ---------------------------------------------------------------------------
 # AniDBClient._parse_reply
 # ---------------------------------------------------------------------------
+
 
 class TestParseReply:
     def test_basic_code_and_label(self):
@@ -118,6 +123,7 @@ class TestParseReply:
 # ---------------------------------------------------------------------------
 # AniDBClient._parse_file_response
 # ---------------------------------------------------------------------------
+
 
 class TestParseFileResponse:
     def _call(self, data_line: str) -> AniDBFileInfo | None:
@@ -165,19 +171,23 @@ class TestParseFileResponse:
 # AniDBClient._parse_episode_number
 # ---------------------------------------------------------------------------
 
+
 class TestParseEpisodeNumber:
-    @pytest.mark.parametrize("epno,expected", [
-        ("1", 1),
-        ("12", 12),
-        ("100", 100),
-        ("S1", None),     # special
-        ("S5", None),     # special
-        ("C1", None),     # credit
-        ("c2", None),     # credit lowercase
-        ("",   None),     # empty
-        ("E5", 5),        # digits extracted
-        ("ep10", 10),     # digits extracted
-    ])
+    @pytest.mark.parametrize(
+        "epno,expected",
+        [
+            ("1", 1),
+            ("12", 12),
+            ("100", 100),
+            ("S1", None),  # special
+            ("S5", None),  # special
+            ("C1", None),  # credit
+            ("c2", None),  # credit lowercase
+            ("", None),  # empty
+            ("E5", 5),  # digits extracted
+            ("ep10", 10),  # digits extracted
+        ],
+    )
     def test_parse(self, epno: str, expected: int | None):
         assert AniDBFetcher._parse_episode_number(epno) == expected
 
@@ -185,6 +195,7 @@ class TestParseEpisodeNumber:
 # ---------------------------------------------------------------------------
 # AniDBClient._fetch_anime / _fetch_episode / _fetch_group
 # ---------------------------------------------------------------------------
+
 
 class TestFetchHelpers:
     """Test the enrichment helpers by mocking _send_recv."""
@@ -198,7 +209,9 @@ class TestFetchHelpers:
 
     def test_fetch_anime_parses_titles(self):
         c = self._make_client()
-        c._send_recv = MagicMock(return_value="230 ANIME 7|TV Series|Shingeki no Kyojin|進撃の巨人|Attack on Titan")
+        c._send_recv = MagicMock(
+            return_value="230 ANIME 7|TV Series|Shingeki no Kyojin|進撃の巨人|Attack on Titan"
+        )
         result = c._fetch_anime(7)
         assert result is not None
         assert result["romaji"] == "Shingeki no Kyojin"
@@ -247,6 +260,7 @@ class TestFetchHelpers:
 # ---------------------------------------------------------------------------
 # AniDBClient.connect / _try_auth / _ping
 # ---------------------------------------------------------------------------
+
 
 class TestConnect:
     def _make_client(self) -> AniDBClient:
@@ -320,6 +334,7 @@ class TestConnect:
 # AniDBClient.file_lookup
 # ---------------------------------------------------------------------------
 
+
 class TestFileLookup:
     def _make_connected_client(self) -> AniDBClient:
         c = AniDBClient("u", "p")
@@ -377,6 +392,7 @@ class TestFileLookup:
 # AniDBClient._enrich_info — hash-like title discarding
 # ---------------------------------------------------------------------------
 
+
 class TestEnrichInfo:
     def test_hash_like_romaji_replaced_by_english(self):
         c = AniDBClient("u", "p")
@@ -422,6 +438,7 @@ class TestEnrichInfo:
 # ---------------------------------------------------------------------------
 # AniDBCache — SQLite-backed
 # ---------------------------------------------------------------------------
+
 
 class TestAniDBCache:
     def test_get_returns_none_when_empty(self, db_cache: AniDBCache):
@@ -511,12 +528,14 @@ class TestAniDBCache:
 # AniDBFetcher.fetch — offline, using the cache
 # ---------------------------------------------------------------------------
 
+
 class TestAniDBFetcherOffline:
     """Test AniDBFetcher.fetch() entirely from cache — no network, no hashing."""
 
     def _make_fetcher(self, tmp_path: Path) -> AniDBFetcher:
         """Return a fetcher with ANIDB credentials set and offline mode on."""
         from renamer.config import Config
+
         cfg = Config(
             media_dir=tmp_path,
             anidb_username="u",
@@ -558,12 +577,27 @@ class TestAniDBFetcherOffline:
         ed2k_ep1 = "a" * 32
         ed2k_ep2 = "b" * 32
 
-        self._seed_cache(fetcher, [
-            _make_info(ed2k=ed2k_ep1, size=64, aid=7, eid=1, episode_number="1",
-                       episode_title_en="Episode One"),
-            _make_info(ed2k=ed2k_ep2, size=64, aid=7, eid=2, episode_number="2",
-                       episode_title_en="Episode Two"),
-        ])
+        self._seed_cache(
+            fetcher,
+            [
+                _make_info(
+                    ed2k=ed2k_ep1,
+                    size=64,
+                    aid=7,
+                    eid=1,
+                    episode_number="1",
+                    episode_title_en="Episode One",
+                ),
+                _make_info(
+                    ed2k=ed2k_ep2,
+                    size=64,
+                    aid=7,
+                    eid=2,
+                    episode_number="2",
+                    episode_title_en="Episode Two",
+                ),
+            ],
+        )
 
         call_count = 0
 
@@ -589,11 +623,20 @@ class TestAniDBFetcherOffline:
         self._create_fake_video(tmp_path, "ep01.mkv")
         ed2k = "c" * 32
 
-        self._seed_cache(fetcher, [
-            _make_info(ed2k=ed2k, size=64, aid=7, eid=1, episode_number="1",
-                       anime_title_romaji="Shingeki no Kyojin",
-                       episode_title_en="First Episode"),
-        ])
+        self._seed_cache(
+            fetcher,
+            [
+                _make_info(
+                    ed2k=ed2k,
+                    size=64,
+                    aid=7,
+                    eid=1,
+                    episode_number="1",
+                    anime_title_romaji="Shingeki no Kyojin",
+                    episode_title_en="First Episode",
+                ),
+            ],
+        )
 
         with (
             patch("renamer.ed2k.compute_ed2k", return_value=ed2k),
@@ -612,12 +655,27 @@ class TestAniDBFetcherOffline:
         ed2k_ep = "d" * 32
         ed2k_sp = "e" * 32
 
-        self._seed_cache(fetcher, [
-            _make_info(ed2k=ed2k_ep, size=64, aid=7, eid=1, episode_number="1",
-                       episode_title_en="Regular"),
-            _make_info(ed2k=ed2k_sp, size=64, aid=7, eid=99, episode_number="S1",
-                       episode_title_en="Special"),
-        ])
+        self._seed_cache(
+            fetcher,
+            [
+                _make_info(
+                    ed2k=ed2k_ep,
+                    size=64,
+                    aid=7,
+                    eid=1,
+                    episode_number="1",
+                    episode_title_en="Regular",
+                ),
+                _make_info(
+                    ed2k=ed2k_sp,
+                    size=64,
+                    aid=7,
+                    eid=99,
+                    episode_number="S1",
+                    episode_title_en="Special",
+                ),
+            ],
+        )
 
         def fake_ed2k(path: Path) -> str:
             return ed2k_sp if "sp1" in path.name else ed2k_ep
@@ -655,7 +713,7 @@ class TestAniDBFetcherOffline:
         fetcher = self._make_fetcher(tmp_path)
 
         for i in range(3):
-            self._create_fake_video(tmp_path, f"anime_a_ep0{i+1}.mkv")
+            self._create_fake_video(tmp_path, f"anime_a_ep0{i + 1}.mkv")
         self._create_fake_video(tmp_path, "anime_b_ep01.mkv")
 
         ed2k_map = {
@@ -665,16 +723,47 @@ class TestAniDBFetcherOffline:
             "anime_b_ep01.mkv": "b1" * 16,
         }
 
-        self._seed_cache(fetcher, [
-            _make_info(ed2k="a1" * 16, size=64, aid=100, eid=1, episode_number="1",
-                       anime_title_romaji="Anime Alpha", episode_title_en="Alpha Ep 1"),
-            _make_info(ed2k="a2" * 16, size=64, aid=100, eid=2, episode_number="2",
-                       anime_title_romaji="Anime Alpha", episode_title_en="Alpha Ep 2"),
-            _make_info(ed2k="a3" * 16, size=64, aid=100, eid=3, episode_number="3",
-                       anime_title_romaji="Anime Alpha", episode_title_en="Alpha Ep 3"),
-            _make_info(ed2k="b1" * 16, size=64, aid=200, eid=10, episode_number="1",
-                       anime_title_romaji="Anime Beta", episode_title_en="Beta Ep 1"),
-        ])
+        self._seed_cache(
+            fetcher,
+            [
+                _make_info(
+                    ed2k="a1" * 16,
+                    size=64,
+                    aid=100,
+                    eid=1,
+                    episode_number="1",
+                    anime_title_romaji="Anime Alpha",
+                    episode_title_en="Alpha Ep 1",
+                ),
+                _make_info(
+                    ed2k="a2" * 16,
+                    size=64,
+                    aid=100,
+                    eid=2,
+                    episode_number="2",
+                    anime_title_romaji="Anime Alpha",
+                    episode_title_en="Alpha Ep 2",
+                ),
+                _make_info(
+                    ed2k="a3" * 16,
+                    size=64,
+                    aid=100,
+                    eid=3,
+                    episode_number="3",
+                    anime_title_romaji="Anime Alpha",
+                    episode_title_en="Alpha Ep 3",
+                ),
+                _make_info(
+                    ed2k="b1" * 16,
+                    size=64,
+                    aid=200,
+                    eid=10,
+                    episode_number="1",
+                    anime_title_romaji="Anime Beta",
+                    episode_title_en="Beta Ep 1",
+                ),
+            ],
+        )
 
         def fake_ed2k(path: Path) -> str:
             return ed2k_map.get(path.name, "zz" * 16)

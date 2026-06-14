@@ -63,7 +63,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         log.error(
             "Usage: python qbit_delete_hook.py <save_path> [torrent_name] [content_path]\n"
-            "Configure in qBittorrent:  python %s \"%%D\" \"%%N\" \"%%F\"",
+            'Configure in qBittorrent:  python %s "%%D" "%%N" "%%F"',
             __file__,
         )
         sys.exit(1)
@@ -92,7 +92,8 @@ def main() -> None:
             "Content path is outside BASE_DOWNLOAD_PATH — skipping cleanup.\n"
             "  content_path      : %s\n"
             "  BASE_DOWNLOAD_PATH: %s",
-            start, BASE_DOWNLOAD_PATH,
+            start,
+            BASE_DOWNLOAD_PATH,
         )
         return
 

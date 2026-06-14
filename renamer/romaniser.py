@@ -25,21 +25,40 @@ def _load_lowercase_words() -> set[str]:
     except (OSError, json.JSONDecodeError) as exc:
         log.warning(
             "Could not load %s (%s) — using built-in fallback.",
-            PARTICLES_FILE.name, exc,
+            PARTICLES_FILE.name,
+            exc,
         )
         return {
-            "no", "ni", "wa", "ga", "wo", "to", "de", "ka", "na", "mo",
-            "ya", "e", "a", "an", "the", "at", "by", "for", "in", "of",
-            "on", "or", "and",
+            "no",
+            "ni",
+            "wa",
+            "ga",
+            "wo",
+            "to",
+            "de",
+            "ka",
+            "na",
+            "mo",
+            "ya",
+            "e",
+            "a",
+            "an",
+            "the",
+            "at",
+            "by",
+            "for",
+            "in",
+            "of",
+            "on",
+            "or",
+            "and",
         }
     words: set[str] = set()
     for key, lst in data.items():
         if key.startswith("_"):
             continue
         if isinstance(lst, list):
-            words.update(
-                w.lower().strip() for w in lst if isinstance(w, str)
-            )
+            words.update(w.lower().strip() for w in lst if isinstance(w, str))
     return words
 
 
@@ -84,13 +103,11 @@ class Romaniser:
     def __init__(self) -> None:
         try:
             import pykakasi
+
             self._kks = pykakasi.kakasi()
             self._available = True
         except ImportError:
-            log.warning(
-                "pykakasi not installed — romaji conversion disabled. "
-                "Run: uv add pykakasi"
-            )
+            log.warning("pykakasi not installed — romaji conversion disabled. Run: uv add pykakasi")
             self._kks = None  # type: ignore
             self._available = False
 

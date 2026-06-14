@@ -33,10 +33,10 @@ class AniDBFileInfo:
 
     ed2k: str
     size: int
-    fid: int                   # AniDB file ID
-    aid: int                   # AniDB anime ID
-    eid: int                   # AniDB episode ID
-    gid: int                   # AniDB group ID
+    fid: int  # AniDB file ID
+    aid: int  # AniDB anime ID
+    eid: int  # AniDB episode ID
+    gid: int  # AniDB group ID
     anime_title_romaji: str = ""
     anime_title_english: str = ""
     anime_title_kanji: str = ""
@@ -150,11 +150,26 @@ class AniDBCache:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    info.ed2k, info.size, info.fid, info.aid, info.eid, info.gid,
-                    info.anime_title_romaji, info.anime_title_english, info.anime_title_kanji,
-                    info.episode_number, info.episode_title_en, info.episode_title_romaji,
-                    info.episode_title_kanji, info.group_name, info.quality, info.source,
-                    info.video_codec, info.audio_codec, info.resolution, info.cached_at,
+                    info.ed2k,
+                    info.size,
+                    info.fid,
+                    info.aid,
+                    info.eid,
+                    info.gid,
+                    info.anime_title_romaji,
+                    info.anime_title_english,
+                    info.anime_title_kanji,
+                    info.episode_number,
+                    info.episode_title_en,
+                    info.episode_title_romaji,
+                    info.episode_title_kanji,
+                    info.group_name,
+                    info.quality,
+                    info.source,
+                    info.video_codec,
+                    info.audio_codec,
+                    info.resolution,
+                    info.cached_at,
                 ),
             )
             conn.commit()
@@ -178,9 +193,7 @@ class AniDBCache:
         cutoff = time.time() - CACHE_STALE_SECONDS
         conn = self._connect()
         try:
-            cur = conn.execute(
-                "DELETE FROM anidb_file_cache WHERE cached_at < ?", (cutoff,)
-            )
+            cur = conn.execute("DELETE FROM anidb_file_cache WHERE cached_at < ?", (cutoff,))
             conn.commit()
             return cur.rowcount
         finally:

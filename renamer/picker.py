@@ -60,7 +60,7 @@ def _truncate_to_width(text: str, max_width: int) -> str:
         return text
 
     # Walk character-by-character, separating ANSI runs from visible chars
-    parts: list[str] = []       # accumulated output
+    parts: list[str] = []  # accumulated output
     vis_count = 0
     i = 0
     raw = text
@@ -300,9 +300,7 @@ class Picker:
         sys.stdout.write("\n")
         lines += 1
 
-        help_line = _truncate_to_width(
-            f"  {_DIM}{self._help}{_RESET}", max_width
-        )
+        help_line = _truncate_to_width(f"  {_DIM}{self._help}{_RESET}", max_width)
         sys.stdout.write(help_line + "\n")
         lines += 1
 
@@ -321,8 +319,8 @@ class Picker:
         if self._lines_drawn > 0:
             # Move cursor up N lines (cursor is at col 0 after _draw)
             sys.stdout.write(f"\033[{self._lines_drawn}A")
-            sys.stdout.write("\r")          # ensure column 0
-            sys.stdout.write(_CLEAR_DOWN)    # clear from cursor to end
+            sys.stdout.write("\r")  # ensure column 0
+            sys.stdout.write(_CLEAR_DOWN)  # clear from cursor to end
             sys.stdout.flush()
 
     def _print_static(self) -> None:
@@ -401,9 +399,7 @@ class MultiPicker:
         self.indicator = indicator
         self.index = 0
         self._selected: set[int] = set(preselected or [])
-        self._help = (
-            "↑↓/jk navigate · Space toggle · a all · Enter confirm · q/ctrl+q cancel"
-        )
+        self._help = "↑↓/jk navigate · Space toggle · a all · Enter confirm · q/ctrl+q cancel"
         self._lines_drawn: int = 0
 
     # ── public API ────────────────────────────────────────────
@@ -482,9 +478,7 @@ class MultiPicker:
     def _fallback(self) -> list[tuple[int, Any]] | None:
         """Simple input()-based multi-selection for non-TTY environments."""
         self._print_static()
-        print(
-            "  Enter comma-separated numbers, 'a' for all, or 'q' to cancel:"
-        )
+        print("  Enter comma-separated numbers, 'a' for all, or 'q' to cancel:")
         try:
             raw = input("  > ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -515,10 +509,7 @@ class MultiPicker:
         check_mark = f"{_GREEN}✓{_RESET}" if checked else " "
 
         if i == self.index:
-            line = (
-                f"  {self.indicator} [{check_mark}] {i + 1}. "
-                f"{_BOLD_CYAN}{label}{_RESET}"
-            )
+            line = f"  {self.indicator} [{check_mark}] {i + 1}. {_BOLD_CYAN}{label}{_RESET}"
         else:
             line = f"    [{check_mark}] {i + 1}. {label}"
 
@@ -534,8 +525,7 @@ class MultiPicker:
             sys.stdout.write(f"  {self.title}\n")
             lines += 1
         sys.stdout.write(
-            f"  {_DIM}Selected: {_RESET}"
-            f"{_YELLOW}{n_selected}{_RESET}{_DIM}/{n_total}{_RESET}\n"
+            f"  {_DIM}Selected: {_RESET}{_YELLOW}{n_selected}{_RESET}{_DIM}/{n_total}{_RESET}\n"
         )
         lines += 1
         sys.stdout.write("\n")
@@ -569,9 +559,7 @@ class MultiPicker:
         sys.stdout.write("\n")
         lines += 1
 
-        help_line = _truncate_to_width(
-            f"  {_DIM}{self._help}{_RESET}", max_width
-        )
+        help_line = _truncate_to_width(f"  {_DIM}{self._help}{_RESET}", max_width)
         sys.stdout.write(help_line + "\n")
         lines += 1
 
@@ -616,6 +604,7 @@ def multi_pick(
 
 
 # ── Ctrl+Q-aware input ────────────────────────────────────────
+
 
 class BackSignal(Exception):
     """
@@ -720,4 +709,3 @@ def back_input(prompt: str = "", default: str = "") -> str:
     finally:
         with contextlib.suppress(Exception):
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-

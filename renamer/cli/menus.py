@@ -55,19 +55,19 @@ def _save_cache(cfg: Config) -> None:
 def show_config(cfg: Config) -> None:
     from renamer import __version__
     from renamer.security import mask_api_key
+
     org = "Yes" if cfg.organize_into_folders else "No"
     abs_num = "Yes" if cfg.absolute_numbering else "No"
     use_hash = "Yes" if cfg.use_hash else "No"
     scan_rec = "Yes" if cfg.scan_recursive else "No"
-    ep_mode = (
-        "Continuing" if cfg.episode_start_mode == START_MODE_CONTINUING
-        else "Per-season"
-    )
+    ep_mode = "Continuing" if cfg.episode_start_mode == START_MODE_CONTINUING else "Per-season"
     eg = cfg.episode_group_id or "(none)"
     title_lang = cfg.episode_title_lang.capitalize()
-    arc_names = ", ".join(
-        f"S{s}: {n}" for s, n in sorted(cfg.season_arc_names.items())
-    ) if cfg.season_arc_names else "(none)"
+    arc_names = (
+        ", ".join(f"S{s}: {n}" for s, n in sorted(cfg.season_arc_names.items()))
+        if cfg.season_arc_names
+        else "(none)"
+    )
     # Mask sensitive values
     tmdb_key_display = mask_api_key(cfg.tmdb_api_key) if cfg.tmdb_api_key else "(not set)"
     anidb_pass_display = mask_api_key(cfg.anidb_password) if cfg.anidb_password else "(not set)"
@@ -80,15 +80,15 @@ def show_config(cfg: Config) -> None:
   TMDB API Key    : {tmdb_key_display}
   AniList ID      : {cfg.anilist_id}
   Kitsu ID        : {cfg.kitsu_id}
-  AniDB User      : {cfg.anidb_username or '(not set)'}
+  AniDB User      : {cfg.anidb_username or "(not set)"}
   AniDB Pass      : {anidb_pass_display}
   AniDB API Key   : {anidb_api_display}
-  AniDB Offline   : {'Yes' if cfg.anidb_offline else 'No'}
+  AniDB Offline   : {"Yes" if cfg.anidb_offline else "No"}
   Episode Group   : {eg}
   Title language  : {title_lang}
   Season arcs     : {arc_names}
   Media dir       : {cfg.media_dir}
-  Base DL path    : {cfg.base_download_path or '(not set — uses env BASE_DOWNLOAD_PATH)'}
+  Base DL path    : {cfg.base_download_path or "(not set — uses env BASE_DOWNLOAD_PATH)"}
   Current dir     : {Path.cwd()}
   Template        : {cfg.name_template}
   Special template: {cfg.special_template}
@@ -100,8 +100,8 @@ def show_config(cfg: Config) -> None:
   Scan depth      : {cfg.scan_depth}
   Season folder   : {cfg.season_folder_template.format(season=1)}  (example)
   Specials folder : {cfg.specials_folder_name}
-  Extensions      : {', '.join(cfg.video_extensions)}
-  Subtitle exts   : {', '.join(cfg.subtitle_extensions)}
+  Extensions      : {", ".join(cfg.video_extensions)}
+  Subtitle exts   : {", ".join(cfg.subtitle_extensions)}
   History         : {cfg.history_file}
   Log file        : renamer.log""")
 
@@ -117,7 +117,11 @@ def switch_provider(cfg: Config) -> None:
     result = Picker(
         providers,
         title="Switch provider",
-        default_index=[Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB].index(cfg.provider) if cfg.provider in [Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB] else 0,
+        default_index=[Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB].index(
+            cfg.provider
+        )
+        if cfg.provider in [Provider.TMDB, Provider.AniList, Provider.Kitsu, Provider.AniDB]
+        else 0,
     ).run()
     if result:
         cfg.provider = Provider.from_str(result[1])
@@ -178,7 +182,9 @@ def set_manual_info(cfg: Config) -> None:
 
     print(f"\n  Current Episode Group: {cfg.episode_group_id or '(none)'}")
     try:
-        new_eg = back_input("  New Episode Group ID (Enter to keep, '0' to clear, Ctrl+Q to go back): ")
+        new_eg = back_input(
+            "  New Episode Group ID (Enter to keep, '0' to clear, Ctrl+Q to go back): "
+        )
     except BackSignal:
         print("  Back.")
         return
@@ -362,9 +368,7 @@ def auto_prompt_episode_groups(cfg: Config, renamer: AnimeRenamer) -> None:
     cfg.episode_group_id = selected.id
     if selected.type == 2:
         cfg.absolute_numbering = True
-        print(
-            f"  Using: {selected.name} (absolute numbering auto-enabled)"
-        )
+        print(f"  Using: {selected.name} (absolute numbering auto-enabled)")
     else:
         print(f"  Using: {selected.name}")
         # Auto-populate arc names from the selected episode group
@@ -411,6 +415,7 @@ def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
     anilist_titles: dict[str, str] = {}  # {romaji|english|native: title}
     try:
         from renamer.providers.anilist import AniListFetcher
+
         af = AniListFetcher()
         media = af._gql(af.SERIES_QUERY, {"search": cfg.series_name})
         if media:
@@ -455,7 +460,11 @@ def select_series_title(cfg: Config, renamer: AnimeRenamer) -> None:
     _add(best_romaji, "Romaji (recommended)")
 
     # AniList titles
-    for key, label in [("romaji", "AniList Romaji"), ("english", "AniList English"), ("native", "AniList Native")]:
+    for key, label in [
+        ("romaji", "AniList Romaji"),
+        ("english", "AniList English"),
+        ("native", "AniList Native"),
+    ]:
         if key in anilist_titles:
             _add(anilist_titles[key], label)
 
@@ -559,10 +568,7 @@ def select_episode_start_mode(cfg: Config) -> None:
             "  Example: if S1 has 12 eps, S2E01 becomes S02E13."
         )
     else:
-        print(
-            "  Switched to per-season mode.\n"
-            "  Each season starts at E01."
-        )
+        print("  Switched to per-season mode.\n  Each season starts at E01.")
 
 
 def select_episode_title_lang(cfg: Config) -> None:
@@ -709,7 +715,9 @@ def _type_arc_names_manually(cfg: Config, current_arcs: dict[int, str]) -> None:
     for s in sorted(current_arcs.keys()):
         current_name = current_arcs[s]
         try:
-            new_name = back_input(f"  Season {s} [{current_name}] (Ctrl+Q to go back): ", default=current_name)
+            new_name = back_input(
+                f"  Season {s} [{current_name}] (Ctrl+Q to go back): ", default=current_name
+            )
         except BackSignal:
             print("  Back.")
             return
@@ -743,7 +751,9 @@ def _type_arc_names_manually(cfg: Config, current_arcs: dict[int, str]) -> None:
 
 
 def _auto_import_arc_names_from_group(
-    cfg: Config, renamer: AnimeRenamer, group_id: str,
+    cfg: Config,
+    renamer: AnimeRenamer,
+    group_id: str,
 ) -> None:
     """
     Automatically import arc names from a TMDB Episode Group
@@ -762,6 +772,7 @@ def _auto_import_arc_names_from_group(
 
     try:
         from renamer.providers.tmdb import TMDBFetcher
+
         if not cfg.tmdb_series_id:
             return
         fetcher = TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
@@ -805,17 +816,16 @@ def _auto_import_arc_names_from_group(
             for s, name in imported_arcs.items():
                 if s not in cfg.season_arc_names:
                     cfg.season_arc_names[s] = name
-            print(
-                f"  Auto-imported {len(imported_arcs)} arc name(s) "
-                f"from episode group."
-            )
+            print(f"  Auto-imported {len(imported_arcs)} arc name(s) from episode group.")
     except Exception as exc:
         log.debug("Auto-import of arc names failed: %s", exc)
         # Non-critical — don't bother the user
 
 
 def _import_arc_names_from_group(
-    cfg: Config, renamer: AnimeRenamer, current_arcs: dict[int, str],
+    cfg: Config,
+    renamer: AnimeRenamer,
+    current_arcs: dict[int, str],
 ) -> None:
     """
     Import season arc names from a TMDB Episode Group.
@@ -867,6 +877,7 @@ def _import_arc_names_from_group(
 
     # Fetch the group details to get sub-group names
     from renamer.providers.tmdb import TMDBFetcher
+
     fetcher = TMDBFetcher(cfg.tmdb_api_key, cfg.tmdb_series_id, cfg)
 
     data = fetcher._get(
@@ -935,10 +946,10 @@ def _import_arc_names_from_group(
     print(f"\n  Imported {len(imported_arcs)} arc name(s) from '{group_name}'.")
 
 
-
 # ---------------------------------------------------------------------------
 # Select Folder & Edit Series ID
 # ---------------------------------------------------------------------------
+
 
 def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
     """
@@ -995,8 +1006,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         # List subfolders of MEDIA_DIR
         video_exts = set(cfg.video_extensions)
         subdirs = sorted(
-            d for d in cfg.media_dir.iterdir()
-            if d.is_dir() and not d.name.startswith(".")
+            d for d in cfg.media_dir.iterdir() if d.is_dir() and not d.name.startswith(".")
         )
         if not subdirs:
             print("  No subfolders found in MEDIA_DIR.")
@@ -1005,11 +1015,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         browse_options = []
         for d in subdirs:
             # Check for video files
-            has_vid = any(
-                f.suffix.lower() in video_exts
-                for f in d.iterdir()
-                if f.is_file()
-            )
+            has_vid = any(f.suffix.lower() in video_exts for f in d.iterdir() if f.is_file())
             # Also check one level deep
             if not has_vid:
                 has_vid = any(
@@ -1046,6 +1052,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
 
     # Apply the target folder's data
     from renamer.renamer import _clean_folder_name
+
     cfg.media_dir = target_dir
     cfg.series_name = _clean_folder_name(target_dir.name)
     cfg.tmdb_series_id = None
@@ -1077,6 +1084,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
 
     # Update renamer state
     from renamer.history import RenameHistory
+
     renamer._cfg = cfg
     renamer._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
 
@@ -1085,7 +1093,10 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         # Show current IDs in labels
         edit_labeled = [
             (f"Search provider for the correct series  (current: {cfg.series_name})", "search"),
-            (f"Set title / provider ID manually  (TMDB:{cfg.tmdb_series_id or '?'} AL:{cfg.anilist_id or '?'})", "manual"),
+            (
+                f"Set title / provider ID manually  (TMDB:{cfg.tmdb_series_id or '?'} AL:{cfg.anilist_id or '?'})",
+                "manual",
+            ),
             ("Select series title from TMDB alt titles + AniList", "select_title"),
             ("Reset all IDs for this folder", "reset"),
             ("<-- Done (return to menu)", "done"),
@@ -1131,6 +1142,7 @@ def edit_series_id_for_folder(cfg: Config, renamer: AnimeRenamer) -> None:
 # ---------------------------------------------------------------------------
 # Navigate / Change Folder
 # ---------------------------------------------------------------------------
+
 
 def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
     """
@@ -1200,6 +1212,7 @@ def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
     base_path = cfg.base_download_path
     if base_path is None:
         import os
+
         raw = os.getenv("BASE_DOWNLOAD_PATH", "").strip()
         base_path = Path(raw).resolve() if raw else cfg.media_dir.resolve().parent
 
@@ -1242,11 +1255,11 @@ def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         # Only check for videos directly in this folder (not deep rglob)
         # so that the selected folder is used exclusively
         video_exts = set(cfg.video_extensions)
-        has_video = any(
-            f.suffix.lower() in video_exts
-            for f in current.iterdir()
-            if f.is_file()
-        ) if any(e.is_file() for e in entries) else False
+        has_video = (
+            any(f.suffix.lower() in video_exts for f in current.iterdir() if f.is_file())
+            if any(e.is_file() for e in entries)
+            else False
+        )
 
         stay_marker = "  [contains video files]" if has_video else ""
         options.append((f"  Use this folder: {current.name}{stay_marker}", "use_current"))
@@ -1254,11 +1267,7 @@ def navigate_to_folder(cfg: Config, renamer: AnimeRenamer) -> None:
         # List subdirectories
         for d in subdirs:
             # Check if it has video files directly inside (shallow check only)
-            has_vid = any(
-                f.suffix.lower() in video_exts
-                for f in d.iterdir()
-                if f.is_file()
-            )
+            has_vid = any(f.suffix.lower() in video_exts for f in d.iterdir() if f.is_file())
             # Also check one level deep (Season sub-folders)
             if not has_vid:
                 has_vid = any(
@@ -1322,6 +1331,7 @@ def _apply_new_media_dir(cfg: Config, renamer: AnimeRenamer, new_dir: Path) -> N
 
     # Reset series identity for the new folder
     from renamer.renamer import _clean_folder_name
+
     cfg.series_name = _clean_folder_name(new_dir.name)
     cfg.tmdb_series_id = None
     cfg.anilist_id = None
@@ -1332,6 +1342,7 @@ def _apply_new_media_dir(cfg: Config, renamer: AnimeRenamer, new_dir: Path) -> N
     # Update the renamer's internal state to match the new folder
     renamer._cfg = cfg
     from renamer.history import RenameHistory
+
     renamer._history = RenameHistory(cfg.history_file, media_dir=cfg.media_dir)
 
     # Try to load cache for the new folder
@@ -1363,10 +1374,11 @@ def _apply_new_media_dir(cfg: Config, renamer: AnimeRenamer, new_dir: Path) -> N
 def _set_env_value(key: str, value: str) -> None:
     """Updates or appends a key=value in the root .env file while preserving other lines."""
     from pathlib import Path
+
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     lines = []
     found = False
-    
+
     if env_path.exists():
         try:
             raw_content = env_path.read_text(encoding="utf-8")
@@ -1405,7 +1417,10 @@ def configure_qbit_hook(cfg: Config) -> None:
         options = [
             (f"qBittorrent URL      : {qbit_url}", "url"),
             (f"qBittorrent Username : {qbit_user or '(none)'}", "username"),
-            (f"qBittorrent Password : {'*' * len(qbit_pass) if qbit_pass else '(none)'}", "password"),
+            (
+                f"qBittorrent Password : {'*' * len(qbit_pass) if qbit_pass else '(none)'}",
+                "password",
+            ),
             (f"Base Download Path   : {base_path}", "base_path"),
             ("Configure Hook Renamer Options (Seasons, Names, Ordering) -->", "renamer_options"),
             ("<-- Back to settings menu", "back"),
@@ -1453,15 +1468,15 @@ def configure_hook_defaults(cfg: Config) -> None:
     """Submenu to configure renamer options (seasons, absolute numbering, name overrides) saved in qbit_hook.json."""
     import json
     from pathlib import Path
-    
+
     conf_path = Path(__file__).resolve().parent.parent.parent / "qbit_hook.json"
-    
+
     # Load configuration
     conf = {}
     if conf_path.exists():
         with contextlib.suppress(Exception):
             conf = json.loads(conf_path.read_text(encoding="utf-8"))
-            
+
     if "global" not in conf:
         conf["global"] = {}
     if "series" not in conf:
@@ -1479,7 +1494,7 @@ def configure_hook_defaults(cfg: Config) -> None:
         provider = glob.get("provider", "tmdb")
         start_mode = glob.get("episode_start_mode", "per_season")
         abs_num = glob.get("absolute_numbering", False)
-        
+
         options = [
             (f"Global Provider           : {provider}", "provider"),
             (f"Global Episode Start Mode : {start_mode}", "start_mode"),
@@ -1488,16 +1503,16 @@ def configure_hook_defaults(cfg: Config) -> None:
             ("Rebuild Library Index (folder → ID map for hook matching) -->", "rebuild_index"),
             ("<-- Back", "back"),
         ]
-        
+
         result = Picker(
             options,
             title="HOOK RENAMER OPTIONS (SAVES TO QBIT_HOOK.JSON)",
             default_index=0,
         ).run()
-        
+
         if result is None or result[1] == "back":
             break
-            
+
         action = result[1]
         if action == "provider":
             p_res = Picker(
@@ -1510,7 +1525,10 @@ def configure_hook_defaults(cfg: Config) -> None:
                 save_conf()
         elif action == "start_mode":
             m_res = Picker(
-                [("Per-Season (E01 each season)", "per_season"), ("Continuing (cumulative episode numbers)", "continuing")],
+                [
+                    ("Per-Season (E01 each season)", "per_season"),
+                    ("Continuing (cumulative episode numbers)", "continuing"),
+                ],
                 title="Select Hook Default Start Mode",
                 default_index=0 if start_mode == "per_season" else 1,
             ).run()
@@ -1597,19 +1615,19 @@ def configure_hook_series_overrides(conf: dict, save_cb) -> None:
         for s_name, item in series_overrides.items():
             label = f"{s_name} -> {item.get('series_name') or s_name}"
             options.append((label, s_name))
-            
+
         options.append(("[Add New Series Override]", "add_new"))
         options.append(("<-- Back", "back"))
-        
+
         result = Picker(
             options,
             title="SERIES OVERRIDES (SAVES TO QBIT_HOOK.JSON)",
             default_index=0,
         ).run()
-        
+
         if result is None or result[1] == "back":
             break
-            
+
         action = result[1]
         if action == "add_new":
             s_name = input("Enter Torrent Series Title (exact name extracted from title): ").strip()
@@ -1635,7 +1653,7 @@ def configure_single_series_override(torrent_name: str, item: dict, save_cb) -> 
         start_mode = item.get("episode_start_mode") or "Default"
         abs_num = item.get("absolute_numbering")
         abs_num_str = str(abs_num) if abs_num is not None else "Default"
-        
+
         options = [
             (f"Official / Cleaned Series Name : {official_name}", "name"),
             (f"Episode Group ID              : {ep_group}", "group_id"),
@@ -1644,16 +1662,16 @@ def configure_single_series_override(torrent_name: str, item: dict, save_cb) -> 
             ("[Delete this Override]", "delete"),
             ("<-- Back", "back"),
         ]
-        
+
         result = Picker(
             options,
             title=f"OVERRIDES FOR: {torrent_name}",
             default_index=0,
         ).run()
-        
+
         if result is None or result[1] == "back":
             break
-            
+
         action = result[1]
         if action == "name":
             val = input(f"New Official Name [{official_name}]: ").strip()
@@ -1700,6 +1718,7 @@ def configure_single_series_override(torrent_name: str, item: dict, save_cb) -> 
 # ---------------------------------------------------------------------------
 # Folder Icon Management
 # ---------------------------------------------------------------------------
+
 
 def set_icon_current_folder(cfg: Config) -> None:
     """
@@ -1914,12 +1933,14 @@ def _make_series_config_for_icon(
     Reuses the same logic as multi_series._make_series_config to keep DRY.
     """
     from renamer.cli.multi_series import _make_series_config
+
     return _make_series_config(series, base_cfg)
 
 
 # ---------------------------------------------------------------------------
 # Backup Database Menu
 # ---------------------------------------------------------------------------
+
 
 def _backup_menu_options() -> list[tuple[str, str]]:
     """Return the backup database submenu options."""
@@ -2159,11 +2180,15 @@ def _backup_scan(db, cfg: Config) -> None:
 
     # Confirm
     print(f"\n  {'-' * 60}")
-    confirm = input(
-        f"  Apply {scan_result.added} insert(s), "
-        f"{scan_result.updated} update(s), and "
-        f"{scan_result.renamed} rename(s)? (Y/n): "
-    ).strip().lower()
+    confirm = (
+        input(
+            f"  Apply {scan_result.added} insert(s), "
+            f"{scan_result.updated} update(s), and "
+            f"{scan_result.renamed} rename(s)? (Y/n): "
+        )
+        .strip()
+        .lower()
+    )
 
     if confirm in ("n", "no"):
         print("  Cancelled - no changes made.")
@@ -2184,7 +2209,9 @@ def _backup_restore(db, cfg: Config) -> None:
         ("Enter a custom path", "custom"),
         ("<-- Back", "back"),
     ]
-    result = Picker(options, title="RESTORE ORIGINAL FILENAMES (USING HASHES)", default_index=0).run()
+    result = Picker(
+        options, title="RESTORE ORIGINAL FILENAMES (USING HASHES)", default_index=0
+    ).run()
     if result is None or result[1] == "back":
         return
 
@@ -2498,11 +2525,21 @@ def _backup_stats(db) -> None:
     print(f"  Total size           : {total_size}")
     print()
     print("  Hash Coverage:")
-    print(f"    CRC32  : {stats['crc32_count']}/{total}  ({100*stats['crc32_count']//max(total,1)}%)")
-    print(f"    MD5    : {stats['md5_count']}/{total}  ({100*stats['md5_count']//max(total,1)}%)")
-    print(f"    SHA1   : {stats['sha1_count']}/{total}  ({100*stats['sha1_count']//max(total,1)}%)")
-    print(f"    ED2K   : {stats['ed2k_count']}/{total}  ({100*stats['ed2k_count']//max(total,1)}%)")
-    print(f"    TMDB ID: {stats['tmdb_count']}/{total}  ({100*stats['tmdb_count']//max(total,1)}%)")
+    print(
+        f"    CRC32  : {stats['crc32_count']}/{total}  ({100 * stats['crc32_count'] // max(total, 1)}%)"
+    )
+    print(
+        f"    MD5    : {stats['md5_count']}/{total}  ({100 * stats['md5_count'] // max(total, 1)}%)"
+    )
+    print(
+        f"    SHA1   : {stats['sha1_count']}/{total}  ({100 * stats['sha1_count'] // max(total, 1)}%)"
+    )
+    print(
+        f"    ED2K   : {stats['ed2k_count']}/{total}  ({100 * stats['ed2k_count'] // max(total, 1)}%)"
+    )
+    print(
+        f"    TMDB ID: {stats['tmdb_count']}/{total}  ({100 * stats['tmdb_count'] // max(total, 1)}%)"
+    )
 
     if stats["md5_count"] < total:
         missing_md5 = total - stats["md5_count"]

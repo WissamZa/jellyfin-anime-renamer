@@ -4,10 +4,7 @@ tests/test_config.py
 Tests for Config.from_env(), Config.validate(), and Provider.from_str().
 """
 
-import os
 from pathlib import Path
-
-import pytest
 
 from renamer.config import (
     START_MODE_CONTINUING,
@@ -17,10 +14,10 @@ from renamer.config import (
     get_logger,
 )
 
-
 # ---------------------------------------------------------------------------
 # Provider.from_str
 # ---------------------------------------------------------------------------
+
 
 class TestProviderFromStr:
     def test_tmdb_case_insensitive(self):
@@ -47,6 +44,7 @@ class TestProviderFromStr:
 # ---------------------------------------------------------------------------
 # Config defaults and types
 # ---------------------------------------------------------------------------
+
 
 class TestConfigDefaults:
     def test_default_provider(self):
@@ -77,6 +75,7 @@ class TestConfigDefaults:
 # ---------------------------------------------------------------------------
 # Config.validate
 # ---------------------------------------------------------------------------
+
 
 class TestConfigValidate:
     def test_missing_tmdb_key_gives_error(self):
@@ -126,6 +125,7 @@ class TestConfigValidate:
 # Config properties
 # ---------------------------------------------------------------------------
 
+
 class TestConfigProperties:
     def test_history_file_path(self, tmp_path):
         cfg = Config(media_dir=tmp_path)
@@ -139,6 +139,7 @@ class TestConfigProperties:
 # ---------------------------------------------------------------------------
 # Config.from_env
 # ---------------------------------------------------------------------------
+
 
 class TestConfigFromEnv:
     def test_reads_tmdb_api_key(self, monkeypatch, tmp_path):
@@ -194,9 +195,11 @@ class TestConfigFromEnv:
 # Logger
 # ---------------------------------------------------------------------------
 
+
 class TestGetLogger:
     def test_returns_logger(self):
         import logging
+
         logger = get_logger("test_renamer_logger")
         assert isinstance(logger, logging.Logger)
 

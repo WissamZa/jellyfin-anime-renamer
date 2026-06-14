@@ -42,6 +42,7 @@ log = get_logger(__name__)
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SubtitleMatch:
     """A single subtitle-to-video match plan."""
@@ -170,8 +171,13 @@ def scan_subtitle_matches(
             if se not in video_map:
                 video_map[se] = v
             else:
-                log.debug("Duplicate S%02dE%02d video: %s (already have %s)",
-                          se[0], se[1], v.name, video_map[se].name)
+                log.debug(
+                    "Duplicate S%02dE%02d video: %s (already have %s)",
+                    se[0],
+                    se[1],
+                    v.name,
+                    video_map[se].name,
+                )
 
     # Also build a map of video stems for direct matching (when subtitle stem
     # already matches a video stem — these are already handled by the existing
@@ -247,6 +253,7 @@ def scan_subtitle_matches(
 # Preview & Execute
 # ---------------------------------------------------------------------------
 
+
 def preview_subtitle_renames(scan_result: SubtitleScanResult) -> None:
     """
     Print a human-readable preview of subtitle rename plans.
@@ -300,8 +307,10 @@ def preview_subtitle_renames(scan_result: SubtitleScanResult) -> None:
     total = scan_result.matched_count
     needs = scan_result.needs_rename_count
     ok = scan_result.already_correct_count
-    print(f"  Total: {total} matched ({needs} to rename, {ok} already correct), "
-          f"{len(unmatched_subs)} unmatched subtitles")
+    print(
+        f"  Total: {total} matched ({needs} to rename, {ok} already correct), "
+        f"{len(unmatched_subs)} unmatched subtitles"
+    )
     print(f"  {'=' * 60}")
 
 
@@ -350,7 +359,8 @@ def execute_subtitle_renames(
         if new_path.exists() and new_path.resolve() != sub_path.resolve():
             log.warning(
                 "Target already exists: %s — skipping %s",
-                new_path, sub_path,
+                new_path,
+                sub_path,
             )
             continue
 

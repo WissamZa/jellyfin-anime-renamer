@@ -142,6 +142,7 @@ def has_folder_icon(folder: Path) -> bool:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _download_image(url: str, dest: Path) -> bool:
     """
     Download an image from *url* and save it to *dest*.
@@ -192,11 +193,7 @@ def _write_directory_file(directory_path: Path, icon_path: Path) -> bool:
     # Resolve to absolute path for maximum compatibility
     abs_icon = icon_path.resolve()
 
-    content = (
-        "[Desktop Entry]\n"
-        "Type=Directory\n"
-        f"Icon={abs_icon}\n"
-    )
+    content = f"[Desktop Entry]\nType=Directory\nIcon={abs_icon}\n"
 
     try:
         directory_path.write_text(content, encoding="utf-8")

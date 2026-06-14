@@ -121,14 +121,16 @@ class ProviderRegistry:
         # Fallback: use the single-result search and wrap it
         single = self.search(provider, name, cfg)
         if single:
-            return [{
-                "series_id": single.series_id,
-                "series_name": single.series_name,
-                "provider": single.provider,
-                "tmdb_id": single.tmdb_id,
-                "anilist_id": single.anilist_id,
-                "kitsu_id": single.kitsu_id,
-            }]
+            return [
+                {
+                    "series_id": single.series_id,
+                    "series_name": single.series_name,
+                    "provider": single.provider,
+                    "tmdb_id": single.tmdb_id,
+                    "anilist_id": single.anilist_id,
+                    "kitsu_id": single.kitsu_id,
+                }
+            ]
         return []
 
     def registered_providers(self) -> list[Provider]:
@@ -220,7 +222,10 @@ def get_registry() -> ProviderRegistry:
     if _global_registry is None:
         _global_registry = ProviderRegistry()
         _global_registry.register(
-            Provider.TMDB, _tmdb_factory, _tmdb_search, _tmdb_multi_search,
+            Provider.TMDB,
+            _tmdb_factory,
+            _tmdb_search,
+            _tmdb_multi_search,
         )
         _global_registry.register(Provider.AniList, _anilist_factory)
         _global_registry.register(Provider.Kitsu, _kitsu_factory, _kitsu_search)

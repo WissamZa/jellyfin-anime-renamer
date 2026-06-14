@@ -34,6 +34,7 @@ log = get_logger(__name__)
 # Central SQLite Database Cache Manager
 # ---------------------------------------------------------------------------
 
+
 class LibraryDBCache:
     """
     Manages a central SQLite database cache (anime_library.db) in MEDIA_DIR
@@ -103,12 +104,14 @@ class LibraryDBCache:
 # Data class for discovered series
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass
 class DiscoveredSeries:
     """A series folder discovered under MEDIA_DIR."""
-    folder: Path            # absolute path to the series folder
-    folder_name: str        # raw folder name (used as the search query)
-    resolved_name: str      # best title after provider lookup (may equal folder_name)
+
+    folder: Path  # absolute path to the series folder
+    folder_name: str  # raw folder name (used as the search query)
+    resolved_name: str  # best title after provider lookup (may equal folder_name)
     tmdb_id: int | None = None
     anilist_id: int | None = None
     kitsu_id: int | None = None
@@ -118,6 +121,7 @@ class DiscoveredSeries:
 # ---------------------------------------------------------------------------
 # Folder scanner
 # ---------------------------------------------------------------------------
+
 
 def scan_series_folders(media_dir: Path, cfg: Config | None = None) -> list[Path]:
     """
@@ -129,7 +133,9 @@ def scan_series_folders(media_dir: Path, cfg: Config | None = None) -> list[Path
     sub-directories) so that the selected folder is used exclusively —
     the scanner will not pick up files from unrelated sub-folders.
     """
-    video_exts = set(cfg.video_extensions) if cfg else {".mkv", ".mp4", ".avi", ".m4v", ".flv", ".webm"}
+    video_exts = (
+        set(cfg.video_extensions) if cfg else {".mkv", ".mp4", ".avi", ".m4v", ".flv", ".webm"}
+    )
     folders: list[Path] = []
 
     if not media_dir.is_dir():
@@ -143,11 +149,7 @@ def scan_series_folders(media_dir: Path, cfg: Config | None = None) -> list[Path
         if entry.name.startswith("."):
             continue
         # Must contain at least one video file directly inside
-        has_video = any(
-            f.suffix.lower() in video_exts
-            for f in entry.iterdir()
-            if f.is_file()
-        )
+        has_video = any(f.suffix.lower() in video_exts for f in entry.iterdir() if f.is_file())
         # Also accept folders whose *immediate* sub-folders contain videos
         # (e.g. a folder that only has Season 01/ sub-folder with videos)
         if not has_video:
@@ -167,6 +169,7 @@ def scan_series_folders(media_dir: Path, cfg: Config | None = None) -> list[Path
 # ---------------------------------------------------------------------------
 # Auto-identify series via provider search
 # ---------------------------------------------------------------------------
+
 
 def _clean_folder_name(raw: str) -> str:
     """
@@ -214,9 +217,9 @@ def _clean_folder_name(raw: str) -> str:
     # Strip language/source tags: [JPN], [ENG], [www], [v2]
     _lang_re = re.compile(
         r"\s*\[(?:"
-        r"[A-Z]{2,4}"          # 2-4 letter uppercase codes: JPN, ENG, CHS, CHT, RAW
-        r"|www"                # www source tag
-        r"|v\d+"               # version tags: v2, v3
+        r"[A-Z]{2,4}"  # 2-4 letter uppercase codes: JPN, ENG, CHS, CHT, RAW
+        r"|www"  # www source tag
+        r"|v\d+"  # version tags: v2, v3
         r")\s*\]",
         re.IGNORECASE,
     )
@@ -228,11 +231,11 @@ def _clean_folder_name(raw: str) -> str:
     # Strip junk bracket tags: [1920x1080], [AAC], [FLAC], [10bit], [v2]
     _junk_re = re.compile(
         r"\s*\[(?:"
-        r"\d{3,4}x\d{3,4}"    # resolution: 1920x1080
-        r"|[A-Z]{2,5}"        # short uppercase: JPN, ENG, WWW, AAC, FLAC
-        r"|\d+bit"            # 10bit, 8bit
-        r"|v\d+"              # v2
-        r"|(?:Hi)?10"         # Hi10, 10
+        r"\d{3,4}x\d{3,4}"  # resolution: 1920x1080
+        r"|[A-Z]{2,5}"  # short uppercase: JPN, ENG, WWW, AAC, FLAC
+        r"|\d+bit"  # 10bit, 8bit
+        r"|v\d+"  # v2
+        r"|(?:Hi)?10"  # Hi10, 10
         r")\s*\]",
         re.IGNORECASE,
     )
@@ -257,7 +260,7 @@ def _clean_folder_name(raw: str) -> str:
     m = re.search(r"\s*\(([^)]+)\)\s*$", name)
     if m:
         alt = m.group(1).strip()
-        main = name[:m.start()].strip()
+        main = name[: m.start()].strip()
         if alt and main and not re.match(r"^\d{4}$", alt):
             name = main
 
@@ -354,7 +357,10 @@ def auto_identify_series(
     if result:
         log.info(
             "Auto-identified '%s' -> '%s' (provider=%s id=%s)",
-            search_name, result.series_name, result.provider, result.series_id,
+            search_name,
+            result.series_name,
+            result.provider,
+            result.series_id,
         )
         tmdb_id = result.tmdb_id or (
             result.series_id if base_cfg.provider == Provider.TMDB else None
@@ -466,9 +472,7 @@ def interactive_search_series(
 
         if action == "search":
             # Let user type a custom search query
-            custom_query = input(
-                f"  Enter search query [{search_name}]: "
-            ).strip()
+            custom_query = input(f"  Enter search query [{search_name}]: ").strip()
             if not custom_query:
                 custom_query = search_name
 
@@ -476,7 +480,10 @@ def interactive_search_series(
             registry = get_registry()
             if base_cfg.provider == Provider.TMDB and base_cfg.tmdb_api_key:
                 results = registry.search_multi(
-                    Provider.TMDB, custom_query, base_cfg, limit=10,
+                    Provider.TMDB,
+                    custom_query,
+                    base_cfg,
+                    limit=10,
                 )
 
                 if not results:
@@ -565,6 +572,7 @@ def interactive_search_series(
 # Build a series-specific Config
 # ---------------------------------------------------------------------------
 
+
 def _make_series_config(series: DiscoveredSeries, base_cfg: Config) -> Config:
     """Create a Config scoped to a single discovered series folder."""
     return dataclasses.replace(
@@ -585,6 +593,7 @@ def _make_series_config(series: DiscoveredSeries, base_cfg: Config) -> Config:
 # ---------------------------------------------------------------------------
 # Main entry point called from the CLI menu
 # ---------------------------------------------------------------------------
+
 
 def run_multi_series_menu(base_cfg: Config) -> None:
     """
@@ -609,14 +618,13 @@ def run_multi_series_menu(base_cfg: Config) -> None:
     # even if it contains loose video files (to avoid merging all torrent subfolders).
     video_exts = set(base_cfg.video_extensions)
     is_root_download = (
-        base_cfg.base_download_path
-        and media_dir.resolve() == base_cfg.base_download_path.resolve()
+        base_cfg.base_download_path and media_dir.resolve() == base_cfg.base_download_path.resolve()
     )
-    has_vid_directly = any(
-        f.suffix.lower() in video_exts
-        for f in media_dir.iterdir()
-        if f.is_file()
-    ) if media_dir.is_dir() and not is_root_download else False
+    has_vid_directly = (
+        any(f.suffix.lower() in video_exts for f in media_dir.iterdir() if f.is_file())
+        if media_dir.is_dir() and not is_root_download
+        else False
+    )
 
     if has_vid_directly:
         # The current folder IS the series folder — process it directly
@@ -743,7 +751,9 @@ def run_multi_series_menu(base_cfg: Config) -> None:
             print(f"\n  Could not auto-identify: {series.resolved_name}")
             print(f"  Folder: {series.folder.name}")
             resolved = interactive_search_series(
-                series.folder, base_cfg, db_cache,
+                series.folder,
+                base_cfg,
+                db_cache,
             )
             if resolved is None:
                 print("  Skipping this series.")
@@ -784,6 +794,7 @@ def run_multi_series_menu(base_cfg: Config) -> None:
 # ---------------------------------------------------------------------------
 # Rename Folders Only (no file renaming)
 # ---------------------------------------------------------------------------
+
 
 def run_rename_folders_menu(base_cfg: Config) -> None:
     """
@@ -864,9 +875,7 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
     # If scan_dir itself contains video files, scan its parent instead
     video_exts = set(base_cfg.video_extensions)
     has_vid_directly = any(
-        f.suffix.lower() in video_exts
-        for f in scan_dir.iterdir()
-        if f.is_file()
+        f.suffix.lower() in video_exts for f in scan_dir.iterdir() if f.is_file()
     )
     if has_vid_directly:
         # scan_dir is itself an anime folder — scan its parent
@@ -934,8 +943,7 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
 
     # Pre-select only folders that would actually change
     preselected = [
-        i for i, (_, s) in enumerate(options)
-        if sanitize_name(s.resolved_name) != s.folder.name
+        i for i, (_, s) in enumerate(options) if sanitize_name(s.resolved_name) != s.folder.name
     ]
 
     choices = MultiPicker(
@@ -995,7 +1003,9 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
         if not series.tmdb_id and not series.anilist_id and not series.kitsu_id:
             print(f"\n  [{i}/{len(selected)}] No provider ID for: {folder.name}")
             resolved = interactive_search_series(
-                folder, base_cfg, db_cache,
+                folder,
+                base_cfg,
+                db_cache,
             )
             if resolved is None:
                 print("  Skipping this folder.")
@@ -1028,7 +1038,9 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
                         "Folder rename skipped: refusing to rename BASE_DOWNLOAD_PATH itself (%s)",
                         folder,
                     )
-                    print(f"  [{i}/{len(selected)}] {folder.name}  — SKIPPED (is BASE_DOWNLOAD_PATH root)")
+                    print(
+                        f"  [{i}/{len(selected)}] {folder.name}  — SKIPPED (is BASE_DOWNLOAD_PATH root)"
+                    )
                     total_skipped += 1
                     continue
                 # Log a note but proceed — the user chose this location
@@ -1098,5 +1110,7 @@ def run_rename_folders_menu(base_cfg: Config) -> None:
     mode_label = "Would rename" if dry_run else "Renamed"
     print(f"\n{'═' * 56}")
     print("  FOLDER RENAME COMPLETE")
-    print(f"  {mode_label}: {total_renamed}  |  Skipped: {total_skipped}  |  Errors: {total_errors}")
+    print(
+        f"  {mode_label}: {total_renamed}  |  Skipped: {total_skipped}  |  Errors: {total_errors}"
+    )
     print(f"{'═' * 56}\n")

@@ -32,6 +32,7 @@ BANNER = f"""
 def _install_completion(shell: str) -> None:
     """Install shell tab-completion for jellyfin_renamer.py."""
     import importlib.util
+
     if importlib.util.find_spec("argcomplete") is None:
         print("  argcomplete is not installed. Install it with: uv add argcomplete")
         return
@@ -44,9 +45,9 @@ def _install_completion(shell: str) -> None:
         bash_completion_dir = os.path.expanduser("~/.bash_completion.d")
         os.makedirs(bash_completion_dir, exist_ok=True)
         completion_file = os.path.join(bash_completion_dir, "jellyfin_renamer")
-        content = f'''# Bash completion for jellyfin_renamer.py
+        content = f"""# Bash completion for jellyfin_renamer.py
 _eval "$(register-python-argcomplete {script_name})"
-'''
+"""
         with open(completion_file, "w") as f:
             f.write(content)
         print(f"  Bash completion installed to: {completion_file}")
@@ -56,9 +57,9 @@ _eval "$(register-python-argcomplete {script_name})"
         zsh_completion_dir = os.path.expanduser("~/.zsh/completion")
         os.makedirs(zsh_completion_dir, exist_ok=True)
         completion_file = os.path.join(zsh_completion_dir, "_jellyfin_renamer")
-        content = f'''#compdef jellyfin_renamer.py
+        content = f"""#compdef jellyfin_renamer.py
 _eval "$(register-python-argcomplete {script_name})"
-'''
+"""
         with open(completion_file, "w") as f:
             f.write(content)
         print(f"  Zsh completion installed to: {completion_file}")
@@ -70,9 +71,9 @@ _eval "$(register-python-argcomplete {script_name})"
         fish_completion_dir = os.path.expanduser("~/.config/fish/completions")
         os.makedirs(fish_completion_dir, exist_ok=True)
         completion_file = os.path.join(fish_completion_dir, "jellyfin_renamer.fish")
-        content = f'''# Fish completion for jellyfin_renamer.py
+        content = f"""# Fish completion for jellyfin_renamer.py
 _eval (register-python-argcomplete {script_name})
-'''
+"""
         with open(completion_file, "w") as f:
             f.write(content)
         print(f"  Fish completion installed to: {completion_file}")
@@ -203,7 +204,11 @@ def run_hash_organize_menu(cfg: Config) -> None:
     options = [
         (f"Use current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
         ("Use current working directory (where you ran the command)", "cwd"),
-        ("Use BASE_DOWNLOAD_PATH" + (f": {cfg.base_download_path}" if cfg.base_download_path else " (not set)"), "base_dl"),
+        (
+            "Use BASE_DOWNLOAD_PATH"
+            + (f": {cfg.base_download_path}" if cfg.base_download_path else " (not set)"),
+            "base_dl",
+        ),
         ("Enter a custom path", "custom"),
         ("<-- Back to main menu", "back"),
     ]
@@ -251,8 +256,7 @@ def run_hash_organize_menu(cfg: Config) -> None:
     # Show what we're about to scan
     video_exts = set(cfg.video_extensions)
     video_count = sum(
-        1 for f in target_dir.rglob("*")
-        if f.is_file() and f.suffix.lower() in video_exts
+        1 for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in video_exts
     )
 
     print(f"\n  Target directory: {target_dir}")
@@ -385,11 +389,13 @@ def run_subtitle_rename_menu(cfg: Config) -> None:
     # Ask whether to scan recursively
     scan_recursive = False
     sub_count_shallow = sum(
-        1 for f in target_dir.iterdir()
+        1
+        for f in target_dir.iterdir()
         if f.is_file() and f.suffix.lower() in cfg.subtitle_extensions
     )
     sub_count_deep = sum(
-        1 for f in target_dir.rglob("*")
+        1
+        for f in target_dir.rglob("*")
         if f.is_file() and f.suffix.lower() in cfg.subtitle_extensions
     )
 
@@ -491,7 +497,6 @@ def run_identity_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             menus.configure_qbit_hook(cfg)
 
 
-
 def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
     """Run the library utilities sub-menu."""
     while True:
@@ -512,6 +517,7 @@ def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             print("  Series cache cleared.")
         elif action == "clear_anidb_cache":
             from renamer.providers.anidb_cache import AniDBCache
+
             AniDBCache().clear_all()
             print("  AniDB hash cache cleared.")
         elif action == "scan_db":
@@ -550,6 +556,7 @@ def _ask_search_mode(cfg: Config, renamer_obj: AnimeRenamer) -> None:
 
     # Check if we can extract a name from the files
     from renamer.hash_organizer import extract_series_from_filename
+
     video_exts = set(cfg.video_extensions)
     file_names: set[str] = set()
     try:
@@ -602,6 +609,7 @@ def _ask_search_mode(cfg: Config, renamer_obj: AnimeRenamer) -> None:
     if choice == "file:auto":
         # Pick the most common name from file extractions
         from collections import Counter
+
         name_counts = Counter()
         for f in sorted(cfg.media_dir.iterdir()):
             if f.is_file() and f.suffix.lower() in video_exts:
@@ -631,6 +639,7 @@ def _ask_search_mode(cfg: Config, renamer_obj: AnimeRenamer) -> None:
 def main() -> None:
     # Install Ctrl+C handler for graceful exit
     import signal
+
     signal.signal(signal.SIGINT, _goodbye_handler)
 
     # Try to enable argcomplete for shell tab-completion

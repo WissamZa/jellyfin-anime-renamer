@@ -36,33 +36,31 @@ class SpecialParser:
 
     # Named specials that have NO episode number -> return 0.
     UNNUMBERED_KEYWORDS: list[str] = [
-        "OVA", "OAD", "Special", "Pilot",
-        "NCOP", "NCED", "PV", "CM",
-        "Preview", "Trailer", "Fan Letter",
+        "OVA",
+        "OAD",
+        "Special",
+        "Pilot",
+        "NCOP",
+        "NCED",
+        "PV",
+        "CM",
+        "Preview",
+        "Trailer",
+        "Fan Letter",
     ]
 
-    _NAMED_SPECIALS_FILE = (
-        Path(__file__).resolve().parent.parent / "title_case_particles.json"
-    )
+    _NAMED_SPECIALS_FILE = Path(__file__).resolve().parent.parent / "title_case_particles.json"
 
     @classmethod
     def _load_named_specials(cls) -> list[str]:
         """Load named-special keywords from title_case_particles.json."""
         try:
-            data = json.loads(
-                cls._NAMED_SPECIALS_FILE.read_text(encoding="utf-8")
-            )
+            data = json.loads(cls._NAMED_SPECIALS_FILE.read_text(encoding="utf-8"))
             named = data.get("named_specials", [])
             if isinstance(named, list):
-                return [
-                    s.strip()
-                    for s in named
-                    if isinstance(s, str) and s.strip()
-                ]
+                return [s.strip() for s in named if isinstance(s, str) and s.strip()]
         except (OSError, json.JSONDecodeError) as exc:
-            log.debug(
-                "Could not load named_specials (%s) — using fallback.", exc
-            )
+            log.debug("Could not load named_specials (%s) — using fallback.", exc)
         return ["Fan Letter", "Pilot"]
 
     @classmethod
@@ -106,11 +104,11 @@ class SpecialParser:
 
 class EpisodeNumberParser:
     PATTERNS: list[tuple[str, str]] = [
-        ("SxxExx",           r"[Ss]\d+[Ee](\d{1,4})"),
+        ("SxxExx", r"[Ss]\d+[Ee](\d{1,4})"),
         ("Explicit keyword", r"(?:ep|episode)[.\s_-]*(\d{1,4})\b"),
-        ("Brackets [NNN]",   r"\[(\d{2,4})\]"),
-        ("Dash-space NNN",   r"[-–]\s*(\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
-        ("Trailing number",  r"[\s._](\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
+        ("Brackets [NNN]", r"\[(\d{2,4})\]"),
+        ("Dash-space NNN", r"[-–]\s*(\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
+        ("Trailing number", r"[\s._](\d{2,4})(?:v\d+)?(?:\s|$|\.)"),
     ]
 
     # Expanded patterns to match explicit Season and Episode together
@@ -127,9 +125,7 @@ class EpisodeNumberParser:
     ]
 
     @classmethod
-    def parse_season_episode(
-        cls, filename: str
-    ) -> tuple[int | None, int | None]:
+    def parse_season_episode(cls, filename: str) -> tuple[int | None, int | None]:
         stem = Path(filename).stem
         for pattern in cls.SEASON_EP_PATTERNS:
             m = pattern.search(stem)

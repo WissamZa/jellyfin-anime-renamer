@@ -29,7 +29,7 @@ import sqlite3
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from renamer.config import get_logger
 
@@ -263,9 +263,7 @@ class AnimeDatabase:
     def get_by_id(self, record_id: int) -> dict | None:
         """Return a single record dict by ID, or *None*."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM anime_backup WHERE id = ?", (record_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM anime_backup WHERE id = ?", (record_id,)).fetchone()
             return dict(row) if row else None
 
     # ── Safe vs Force update ────────────────────────────
@@ -298,9 +296,7 @@ class AnimeDatabase:
             return False, []
 
         def _do(c: sqlite3.Connection) -> tuple[bool, list[str]]:
-            row = c.execute(
-                "SELECT * FROM anime_backup WHERE id = ?", (record_id,)
-            ).fetchone()
+            row = c.execute("SELECT * FROM anime_backup WHERE id = ?", (record_id,)).fetchone()
             if not row:
                 return False, []
 
@@ -314,9 +310,7 @@ class AnimeDatabase:
 
             set_parts = [f"{k} = ?" for k in safe]
             vals = list(safe.values()) + [record_id]
-            c.execute(
-                f"UPDATE anime_backup SET {', '.join(set_parts)} WHERE id = ?", vals
-            )
+            c.execute(f"UPDATE anime_backup SET {', '.join(set_parts)} WHERE id = ?", vals)
             return True, list(safe.keys())
 
         if conn is not None:
@@ -344,9 +338,7 @@ class AnimeDatabase:
         vals = list(fields.values()) + [record_id]
 
         def _do(c: sqlite3.Connection) -> bool:
-            c.execute(
-                f"UPDATE anime_backup SET {', '.join(set_parts)} WHERE id = ?", vals
-            )
+            c.execute(f"UPDATE anime_backup SET {', '.join(set_parts)} WHERE id = ?", vals)
             return c.execute("SELECT changes()").fetchone()[0] > 0
 
         if conn is not None:
@@ -360,9 +352,7 @@ class AnimeDatabase:
     def delete_record(self, record_id: int) -> bool:
         """Delete a record by ID."""
         with self._connect() as conn:
-            cur = conn.execute(
-                "DELETE FROM anime_backup WHERE id = ?", (record_id,)
-            )
+            cur = conn.execute("DELETE FROM anime_backup WHERE id = ?", (record_id,))
             conn.commit()
             return cur.rowcount > 0
 
@@ -375,6 +365,7 @@ class AnimeDatabase:
         conn: sqlite3.Connection | None = None,
     ) -> list[dict]:
         """Return paginated records, newest first."""
+
         def _do(c: sqlite3.Connection) -> list[dict]:
             rows = c.execute(
                 "SELECT * FROM anime_backup ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -418,26 +409,21 @@ class AnimeDatabase:
 
         Returns the confirmed match dict, or *None*.
         """
+
         def _do(c: sqlite3.Connection) -> dict | None:
             # ── Strong hashes first (unique, no collision risk) ──
             if md5:
-                row = c.execute(
-                    "SELECT * FROM anime_backup WHERE md5 = ?", (md5,)
-                ).fetchone()
+                row = c.execute("SELECT * FROM anime_backup WHERE md5 = ?", (md5,)).fetchone()
                 if row:
                     return dict(row)
 
             if sha1:
-                row = c.execute(
-                    "SELECT * FROM anime_backup WHERE sha1 = ?", (sha1,)
-                ).fetchone()
+                row = c.execute("SELECT * FROM anime_backup WHERE sha1 = ?", (sha1,)).fetchone()
                 if row:
                     return dict(row)
 
             if ed2k:
-                row = c.execute(
-                    "SELECT * FROM anime_backup WHERE ed2k = ?", (ed2k,)
-                ).fetchone()
+                row = c.execute("SELECT * FROM anime_backup WHERE ed2k = ?", (ed2k,)).fetchone()
                 if row:
                     return dict(row)
 
@@ -485,9 +471,13 @@ class AnimeDatabase:
         Confirmation requires matching both ``file_name`` **and**
         ``size_in_bytes``.
         """
-        if file_name and candidate.get("file_name") == file_name:
-            if size is not None and candidate.get("size_in_bytes") == size:
-                return True
+        if (
+            file_name
+            and candidate.get("file_name") == file_name
+            and size is not None
+            and candidate.get("size_in_bytes") == size
+        ):
+            return True
         return False
 
     # ── Search / Filter ─────────────────────────────────
@@ -537,9 +527,7 @@ class AnimeDatabase:
 
     # ── Smart Upsert ────────────────────────────────────
 
-    def smart_upsert(
-        self, record: dict, conn: sqlite3.Connection | None = None
-    ) -> UpsertResult:
+    def smart_upsert(self, record: dict, conn: sqlite3.Connection | None = None) -> UpsertResult:
         """
         Identify whether *record* should be inserted, skipped, or used to
         fill missing fields on an existing row.
@@ -618,9 +606,7 @@ class AnimeDatabase:
         parser = EpisodeNumberParser()
 
         video_files = sorted(
-            p
-            for p in folder.rglob("*")
-            if p.is_file() and p.suffix.lower() in video_extensions
+            p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in video_extensions
         )
 
         if not video_files:
@@ -640,7 +626,9 @@ class AnimeDatabase:
         # Collect unique series names and resolve titles
         unique_series = sorted({v for v in series_name_map.values() if v})
         if unique_series and cfg is not None:
-            print(f"  Resolving {len(unique_series)} series title(s) via TMDB + AniList …", flush=True)
+            print(
+                f"  Resolving {len(unique_series)} series title(s) via TMDB + AniList …", flush=True
+            )
 
         for idx, detected in enumerate(unique_series, 1):
             if detected not in resolved_cache and cfg is not None:
@@ -722,7 +710,8 @@ class AnimeDatabase:
                     # Step 3: new file — compute MD5+SHA1 first (single pass)
                     print(
                         f"  [{i}/{total}] {vf.name} — hashing (MD5+SHA1) …",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
                     hashes = compute_hashes_fast(vf, need_sha1=True, need_ed2k=False)
                     if crc32:
@@ -765,7 +754,9 @@ class AnimeDatabase:
                         # Compute ED2K only if missing
                         if existing_by_hash.get("ed2k") is None:
                             print(
-                                "      hashing (ED2K) …", end="", flush=True,
+                                "      hashing (ED2K) …",
+                                end="",
+                                flush=True,
                             )
                             ed2k_hashes = compute_hashes_fast(vf, need_sha1=False, need_ed2k=True)
                             if "ed2k" in ed2k_hashes:
@@ -790,7 +781,9 @@ class AnimeDatabase:
                             )
                             log.info(
                                 "Renamed file detected: '%s' -> was '%s' (record #%d)",
-                                vf.name, old_name, existing_by_hash["id"],
+                                vf.name,
+                                old_name,
+                                existing_by_hash["id"],
                             )
                         else:
                             result.skipped += 1
@@ -799,7 +792,8 @@ class AnimeDatabase:
                     # Step 3c: truly new file — compute ED2K too
                     print(
                         f"  [{i}/{total}] {vf.name} — hashing (ED2K) …",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
                     ed2k_hashes = compute_hashes_fast(vf, need_sha1=False, need_ed2k=True)
                     if "ed2k" in ed2k_hashes:
@@ -903,9 +897,9 @@ class AnimeDatabase:
                         # but scan missed it (e.g. renamed file with same content).
                         # Do a safe update instead of crashing.
                         log.warning(
-                            "IntegrityError on INSERT for '%s': %s — "
-                            "doing safe update instead",
-                            record.get("file_name", "?"), ie,
+                            "IntegrityError on INSERT for '%s': %s — doing safe update instead",
+                            record.get("file_name", "?"),
+                            ie,
                         )
                         existing = self.find_existing(
                             conn=conn,
@@ -917,12 +911,17 @@ class AnimeDatabase:
                             # Force-update file_name, safe-fill missing fields
                             if existing.get("file_name") != record.get("file_name"):
                                 self.update_record_force(
-                                    existing["id"], conn=conn,
+                                    existing["id"],
+                                    conn=conn,
                                     file_name=record["file_name"],
                                 )
                             safe: dict[str, Any] = {}
                             for k, v in record.items():
-                                if k not in ("file_name",) and v is not None and existing.get(k) is None:
+                                if (
+                                    k not in ("file_name",)
+                                    and v is not None
+                                    and existing.get(k) is None
+                                ):
                                     safe[k] = v
                             if safe:
                                 self.update_record_safe(existing["id"], conn=conn, **safe)
@@ -952,15 +951,15 @@ class AnimeDatabase:
 
         log.info(
             "Apply scan: %d inserted, %d updated (incl. %d renamed)",
-            inserted, updated, len(scan_result.pending_renames),
+            inserted,
+            updated,
+            len(scan_result.pending_renames),
         )
         return inserted, updated
 
     # ── Export / Import ─────────────────────────────────
 
-    def export_to_json(
-        self, output_path: Path, records: list[dict] | None = None
-    ) -> Path:
+    def export_to_json(self, output_path: Path, records: list[dict] | None = None) -> Path:
         """
         Export records to a JSON file.
         If *records* is *None*, exports all records.
@@ -1027,9 +1026,7 @@ class AnimeDatabase:
                 conn.rollback()
                 raise
 
-        log.info(
-            "Import: %d added, %d updated, %d skipped", added, updated, skipped
-        )
+        log.info("Import: %d added, %d updated, %d skipped", added, updated, skipped)
         return added, updated, skipped
 
     # ── Statistics ──────────────────────────────────────
@@ -1058,9 +1055,7 @@ class AnimeDatabase:
         """
         folder = folder.resolve()
         video_files = sorted(
-            p
-            for p in folder.rglob("*")
-            if p.is_file() and p.suffix.lower() in video_extensions
+            p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in video_extensions
         )
 
         if not video_files:
@@ -1088,7 +1083,8 @@ class AnimeDatabase:
                 if not record:
                     print(
                         f"  [{i}/{total}] {vf.name} — hashing (MD5+SHA1) …",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
                     hashes = compute_hashes_fast(vf, need_sha1=True, need_ed2k=False)
                     record = self.find_existing(
@@ -1102,7 +1098,8 @@ class AnimeDatabase:
                 if not record:
                     print(
                         f"  [{i}/{total}] {vf.name} — hashing (ED2K) …",
-                        end="", flush=True,
+                        end="",
+                        flush=True,
                     )
                     ed2k_hashes = compute_hashes_fast(vf, need_sha1=False, need_ed2k=True)
                     record = self.find_existing(
@@ -1114,13 +1111,15 @@ class AnimeDatabase:
                 if record:
                     db_name = record.get("file_name", "")
                     needs_rename = db_name != vf.name
-                    results.append({
-                        "disk_path": vf,
-                        "current_name": vf.name,
-                        "db_name": db_name,
-                        "record": record,
-                        "needs_rename": needs_rename,
-                    })
+                    results.append(
+                        {
+                            "disk_path": vf,
+                            "current_name": vf.name,
+                            "db_name": db_name,
+                            "record": record,
+                            "needs_rename": needs_rename,
+                        }
+                    )
 
         return results
 
@@ -1261,9 +1260,7 @@ class AnimeDatabase:
 # ═══════════════════════ TITLE RESOLUTION ═══════════════════════
 
 
-def _resolve_titles(
-    series_name: str, cfg: Any
-) -> tuple[str | None, str | None, int | None]:
+def _resolve_titles(series_name: str, cfg: Any) -> tuple[str | None, str | None, int | None]:
     """
     Resolve both English and Romaji titles from TMDB + AniList.
 
@@ -1294,8 +1291,8 @@ def _resolve_titles(
 
     # ── Step 1: TMDB search for English name + ID ──
     with contextlib.suppress(Exception):
-        from renamer.providers.registry import get_registry
         from renamer.config import Provider
+        from renamer.providers.registry import get_registry
 
         registry = get_registry()
         search_result = registry.search(Provider.TMDB, cleaned, cfg)
@@ -1307,6 +1304,7 @@ def _resolve_titles(
             if tmdb_id and cfg.tmdb_api_key:
                 with contextlib.suppress(Exception):
                     from renamer.providers.tmdb import TMDBFetcher
+
                     fetcher = TMDBFetcher(
                         api_key=cfg.tmdb_api_key,
                         series_id=tmdb_id,
@@ -1317,7 +1315,8 @@ def _resolve_titles(
                         alt_titles = [t["title"] for t in alt_title_list]
                         log.info(
                             "TMDB Alternative Titles for id=%d: %s",
-                            tmdb_id, alt_titles[:5],
+                            tmdb_id,
+                            alt_titles[:5],
                         )
                         # If the search name matches an alt title better
                         # than the top result, the TMDB match is confirmed.
@@ -1342,8 +1341,8 @@ def _resolve_titles(
     # ── Step 4: If TMDB failed but AniList found a title, retry TMDB ──
     if not tmdb_id and anilist_romaji:
         with contextlib.suppress(Exception):
-            from renamer.providers.registry import get_registry
             from renamer.config import Provider
+            from renamer.providers.registry import get_registry
 
             registry = get_registry()
             search_result = registry.search(Provider.TMDB, anilist_romaji, cfg)
@@ -1352,13 +1351,15 @@ def _resolve_titles(
                 title_en = search_result.series_name
                 log.info(
                     "TMDB retry with AniList title '%s' -> id=%d",
-                    anilist_romaji, tmdb_id,
+                    anilist_romaji,
+                    tmdb_id,
                 )
 
                 # Fetch alternative titles for this newly found series
                 if tmdb_id and cfg.tmdb_api_key and not alt_titles:
                     with contextlib.suppress(Exception):
                         from renamer.providers.tmdb import TMDBFetcher
+
                         fetcher = TMDBFetcher(
                             api_key=cfg.tmdb_api_key,
                             series_id=tmdb_id,
@@ -1371,8 +1372,8 @@ def _resolve_titles(
     # Also try TMDB with AniList English title if still no match
     if not tmdb_id and anilist_english and anilist_english != anilist_romaji:
         with contextlib.suppress(Exception):
-            from renamer.providers.registry import get_registry
             from renamer.config import Provider
+            from renamer.providers.registry import get_registry
 
             registry = get_registry()
             search_result = registry.search(Provider.TMDB, anilist_english, cfg)
@@ -1381,7 +1382,8 @@ def _resolve_titles(
                 title_en = search_result.series_name
                 log.info(
                     "TMDB retry with AniList English '%s' -> id=%d",
-                    anilist_english, tmdb_id,
+                    anilist_english,
+                    tmdb_id,
                 )
 
     # ── Step 5: Try search variants if both TMDB and AniList failed ──
@@ -1391,8 +1393,8 @@ def _resolve_titles(
                 continue
             # Try TMDB
             with contextlib.suppress(Exception):
-                from renamer.providers.registry import get_registry
                 from renamer.config import Provider
+                from renamer.providers.registry import get_registry
 
                 registry = get_registry()
                 search_result = registry.search(Provider.TMDB, variant, cfg)
@@ -1401,7 +1403,8 @@ def _resolve_titles(
                     title_en = search_result.series_name
                     log.info(
                         "TMDB variant search '%s' -> id=%d",
-                        variant, tmdb_id,
+                        variant,
+                        tmdb_id,
                     )
                     break
 
@@ -1409,6 +1412,7 @@ def _resolve_titles(
             if not title_rom:
                 with contextlib.suppress(Exception):
                     from renamer.providers.anilist import AniListFetcher
+
                     af = AniListFetcher()
                     media = af._gql(af.SERIES_QUERY, {"search": variant})
                     if media:
@@ -1418,7 +1422,8 @@ def _resolve_titles(
                             title_en = titles.get("english")
                         log.info(
                             "AniList variant search '%s' -> romaji='%s'",
-                            variant, title_rom,
+                            variant,
+                            title_rom,
                         )
                         break
 
@@ -1433,26 +1438,26 @@ def _resolve_titles(
                 "AniList romaji '%s' confirmed by TMDB alternative titles",
                 title_rom,
             )
-        elif title_en and title_rom.lower() != title_en.lower():
-            # AniList romaji doesn't match any alt title — might be different series
-            # Check if the original search name is in alt titles (confirms match)
-            if cleaned.lower() in alt_lower:
-                log.info(
-                    "Search name '%s' confirmed by TMDB alternative titles for id=%d",
-                    cleaned, tmdb_id,
-                )
+        elif title_en and title_rom.lower() != title_en.lower() and cleaned.lower() in alt_lower:
+            log.info(
+                "Search name '%s' confirmed by TMDB alternative titles for id=%d",
+                cleaned,
+                tmdb_id,
+            )
 
     # ── Step 7: Final fallback ──
     if not title_rom:
         # Try to use an alt title that looks like romaji
         if alt_titles:
             from renamer.romaniser import get_romaniser
+
             romaniser = get_romaniser()
             for at in alt_titles:
                 if romaniser.is_japanese(at):
                     title_rom = romaniser.to_romaji(at)
                     log.info(
-                        "Using romanised TMDB alt title as romaji: '%s'", title_rom,
+                        "Using romanised TMDB alt title as romaji: '%s'",
+                        title_rom,
                     )
                     break
         if not title_rom:
@@ -1524,9 +1529,7 @@ def _extract_series_name_from_file(filename: str) -> str:
     stem = Path(filename).stem
     cleaned = GROUP_PATTERN.sub("", stem).strip()
     # Remove trailing episode-like patterns: - 01, - S01E01, etc.
-    cleaned = re.sub(
-        r"\s*[-–]\s*(?:S\d+E\d+|\d{1,4})(?:v\d+)?\s*.*$", "", cleaned
-    ).strip()
+    cleaned = re.sub(r"\s*[-–]\s*(?:S\d+E\d+|\d{1,4})(?:v\d+)?\s*.*$", "", cleaned).strip()
     # Remove bracketed tags like [1080p], [HEVC]
     cleaned = re.sub(r"\s*\[[^\]]*\]", "", cleaned).strip()
     cleaned = cleaned.strip(" .-_–—")
@@ -1546,12 +1549,32 @@ def _clean_folder_name_for_search(folder_name: str) -> str:
     if not name or name in (".", "..") or not re.search(r"\w", name):
         return ""
     # Reject generic directory names that are never anime titles
-    _GENERIC_DIRS = frozenset({
-        "downloads", "download", "videos", "video", "torrent",
-        "torrents", "media", "anime", "tv", "movies", "movie",
-        "series", "shows", "music", "incomplete", "completed",
-        "archive", "temp", "tmp", "new", "old", "backup",
-    })
+    _GENERIC_DIRS = frozenset(
+        {
+            "downloads",
+            "download",
+            "videos",
+            "video",
+            "torrent",
+            "torrents",
+            "media",
+            "anime",
+            "tv",
+            "movies",
+            "movie",
+            "series",
+            "shows",
+            "music",
+            "incomplete",
+            "completed",
+            "archive",
+            "temp",
+            "tmp",
+            "new",
+            "old",
+            "backup",
+        }
+    )
     if name.lower() in _GENERIC_DIRS:
         return ""
     # Strip year suffix: "Series (2024)" -> "Series"

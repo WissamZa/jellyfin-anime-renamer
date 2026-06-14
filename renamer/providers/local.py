@@ -58,7 +58,8 @@ class LocalFetcher(EpisodeFetcher):
         sp_parser = SpecialParser()
 
         files = sorted(
-            p for p in self._cfg.media_dir.rglob("*")
+            p
+            for p in self._cfg.media_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in self._cfg.video_extensions
         )
 
@@ -113,7 +114,8 @@ class LocalFetcher(EpisodeFetcher):
         sp_parser = SpecialParser()
 
         files = sorted(
-            p for p in self._cfg.media_dir.rglob("*")
+            p
+            for p in self._cfg.media_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in self._cfg.video_extensions
         )
 

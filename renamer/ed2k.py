@@ -45,6 +45,7 @@ def _md4_hash(data: bytes) -> bytes:
     except ImportError:
         # Fallback: try hashlib if available (Python 3.9+ removed md4)
         import hashlib
+
         try:
             return hashlib.new("md4", data).digest()
         except ValueError as exc:

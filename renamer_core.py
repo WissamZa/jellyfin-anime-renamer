@@ -15,15 +15,16 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 import requests
 from dotenv import load_dotenv
 
 # Load .env from the same directory as this file
 load_dotenv(Path(__file__).parent / ".env")
+
+_api_cache: dict = {}
 
 # ─────────────────────── LOGGING ────────────────────────
 LOG_FILE = Path(__file__).parent / "renamer.log"
@@ -180,7 +181,7 @@ class Romaniser:
           - no Japanese characters detected
           - pykakasi is not installed
         """
-        if not self._available or not self.is_japanese(text):
+        if self._kks is None or not self.is_japanese(text):
             return text
 
         result = self._kks.convert(text)
@@ -207,7 +208,7 @@ _romaniser = Romaniser()
 
 
 # ═══════════════════════ PROVIDERS ═════════════════════
-class Provider(str, Enum):
+class Provider(StrEnum):
     """
     Metadata provider for episode data.
 
@@ -238,14 +239,14 @@ class Config:
 
     def __init__(
         self,
-        tmdb_api_key: Optional[str] = None,
-        series_name: Optional[str] = None,
-        tmdb_series_id: Optional[int] = None,
-        anilist_id: Optional[int] = None,
-        kitsu_id: Optional[int] = None,
-        media_dir: Optional[Path] = None,
-        organize_into_folders: Optional[bool] = None,
-        provider: Optional[Provider] = None,
+        tmdb_api_key: str | None = None,
+        series_name: str | None = None,
+        tmdb_series_id: int | None = None,
+        anilist_id: int | None = None,
+        kitsu_id: int | None = None,
+        media_dir: Path | None = None,
+        organize_into_folders: bool | None = None,
+        provider: Provider | None = None,
     ):
         self.TMDB_API_KEY = tmdb_api_key or os.getenv("TMDB_API_KEY", "").strip()
 
@@ -266,18 +267,18 @@ class Config:
                 self.SERIES_NAME = os.getcwd().rsplit(os.sep, 1)[-1]
 
         # TMDB series ID: explicit parameter > env var > None (resolved later via search)
-        self.TMDB_SERIES_ID: Optional[int] = (
+        self.TMDB_SERIES_ID: int | None = (
             tmdb_series_id
             if tmdb_series_id is not None
             else self._parse_tmdb_series_id(os.getenv("TMDB_SERIES_ID", ""))
         )
 
-        self.ANILIST_ID: Optional[int] = (
+        self.ANILIST_ID: int | None = (
             anilist_id
             if anilist_id is not None
             else self._parse_anilist_id(os.getenv("ANILIST_ID", ""))
         )
-        self.KITSU_ID: Optional[int] = (
+        self.KITSU_ID: int | None = (
             kitsu_id
             if kitsu_id is not None
             else self._parse_int_env(os.getenv("KITSU_ID", ""), "KITSU_ID")
@@ -313,7 +314,7 @@ class Config:
         return self.MEDIA_DIR / "rename_history.json"
 
     @staticmethod
-    def _parse_tmdb_series_id(raw: str) -> Optional[int]:
+    def _parse_tmdb_series_id(raw: str) -> int | None:
         """
         Safely parse TMDB_SERIES_ID from env.
         Returns None if the value is missing or blank — the ID will be
@@ -332,7 +333,7 @@ class Config:
             return None
 
     @staticmethod
-    def _parse_anilist_id(raw: str) -> Optional[int]:
+    def _parse_anilist_id(raw: str) -> int | None:
         """
         Safely parse ANILIST_ID from env.
         Returns None (not 0, not a crash) if the value is missing or blank.
@@ -351,7 +352,7 @@ class Config:
             return None
 
     @staticmethod
-    def _parse_int_env(raw: str, name: str) -> Optional[int]:
+    def _parse_int_env(raw: str, name: str) -> int | None:
         """Generic safe parser for integer env vars. Returns None if blank/invalid."""
         val = raw.strip()
         if not val:
@@ -406,7 +407,7 @@ class EpisodeFetcher(ABC):
     name: str = "unknown"
 
     @abstractmethod
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]: ...
+    def fetch(self) -> dict[int, EpisodeInfo] | None: ...
 
     @abstractmethod
     def fetch_specials(self) -> dict[int, EpisodeInfo]: ...
@@ -414,10 +415,10 @@ class EpisodeFetcher(ABC):
     @staticmethod
     def _get(
         url: str,
-        params: Optional[dict] = None,
-        retries: Optional[int] = None,
-        cfg: Optional[Config] = None,
-    ) -> Optional[dict]:
+        params: dict | None = None,
+        retries: int | None = None,
+        cfg: Config | None = None,
+    ) -> dict | None:
         _cfg = cfg or Config()
         attempts = retries or _cfg.RETRY_ATTEMPTS
         for attempt in range(1, attempts + 1):
@@ -464,7 +465,7 @@ class TMDBSearch:
     def __init__(self, api_key: str):
         self._params = {"api_key": api_key}
 
-    def find(self, name: str) -> Optional[tuple[int, str]]:
+    def find(self, name: str) -> tuple[int, str] | None:
         """
         Returns (tmdb_id, romaji_name) for the top search result.
 
@@ -502,7 +503,7 @@ class TMDBSearch:
         log.info("Final series name: '%s' (TMDB id=%d)", romaji, tmdb_id)
         return tmdb_id, romaji
 
-    def _fetch_japanese_name(self, series_id: int) -> Optional[str]:
+    def _fetch_japanese_name(self, series_id: int) -> str | None:
         data = EpisodeFetcher._get(
             f"{self.BASE}/tv/{series_id}",
             {**self._params, "language": "ja"},
@@ -517,14 +518,14 @@ class TMDBFetcher(EpisodeFetcher):
     name = "TMDB"
     BASE = "https://api.themoviedb.org/3"
 
-    def __init__(self, api_key: str, series_id: int, cfg: Optional[Config] = None):
+    def __init__(self, api_key: str, series_id: int, cfg: Config | None = None):
         self._key = api_key
         self._series_id = series_id
         self._params = {"api_key": api_key}
         self._cfg = cfg or Config()
         self._has_specials = True
 
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         log.info("TMDB — fetching series id=%s …", self._series_id)
         show = self._get(f"{self.BASE}/tv/{self._series_id}", self._params, cfg=self._cfg)
         if not show:
@@ -691,10 +692,10 @@ class AniListFetcher(EpisodeFetcher):
     }
     """
 
-    def __init__(self, anime_id: Optional[int] = None):
+    def __init__(self, anime_id: int | None = None):
         self._id = anime_id
 
-    def _gql(self, query: str, variables: dict) -> Optional[dict]:
+    def _gql(self, query: str, variables: dict) -> dict | None:
         try:
             r = requests.post(
                 self.URL,
@@ -708,12 +709,12 @@ class AniListFetcher(EpisodeFetcher):
             log.error("AniList request failed: %s", e)
         return None
 
-    def find_id(self, name: str) -> Optional[int]:
+    def find_id(self, name: str) -> int | None:
         """Search AniList by name and return the AniList series ID."""
         media = self._gql(self.SERIES_QUERY, {"search": name})
         return media.get("id") if media else None
 
-    def find_romaji(self, name: str) -> Optional[str]:
+    def find_romaji(self, name: str) -> str | None:
         """
         Search AniList by name and return the official romaji title.
         Also caches the resolved AniList ID on self._id for later use.
@@ -738,7 +739,7 @@ class AniListFetcher(EpisodeFetcher):
         )
         return romaji or english
 
-    def find_series(self, name: str) -> Optional[tuple[int, str]]:
+    def find_series(self, name: str) -> tuple[int, str] | None:
         """
         Search AniList by name and return (anilist_id, romaji_name).
 
@@ -788,7 +789,7 @@ class AniListFetcher(EpisodeFetcher):
         )
         return anilist_id, chosen
 
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         if not self._id:
             return None
         log.info("AniList — fetching episode titles for id=%d …", self._id)
@@ -820,7 +821,7 @@ class AniListFetcher(EpisodeFetcher):
         log.info("AniList: mapped %d episode titles.", len(mapping))
         return mapping
 
-    def _fetch_from_airing_schedule(self) -> Optional[dict[int, EpisodeInfo]]:
+    def _fetch_from_airing_schedule(self) -> dict[int, EpisodeInfo] | None:
         """
         Fall back to the airing schedule when streamingEpisodes is empty.
         This provides episode numbers and air dates but no titles.
@@ -896,16 +897,16 @@ class KitsuFetcher(EpisodeFetcher):
     # Minimum similarity (0-1) to accept a name match
     MIN_SIMILARITY = 0.45
 
-    def __init__(self, kitsu_id: Optional[int] = None):
+    def __init__(self, kitsu_id: int | None = None):
         self._id = kitsu_id
-        self._seasons: Optional[list[tuple[int, str, int]]] = (
+        self._seasons: list[tuple[int, str, int]] | None = (
             None  # [(season_num, title, kitsu_id), …]
         )
         self._specials_cache: dict[int, EpisodeInfo] = {}
 
     # ── Kitsu API helpers ──────────────────────────────────
 
-    def _kitsu_get(self, url: str, params: Optional[dict] = None) -> Optional[dict]:
+    def _kitsu_get(self, url: str, params: dict | None = None) -> dict | None:
         """GET request to Kitsu API with caching and error handling."""
         cache_key = ("kitsu", url, frozenset((params or {}).items()))
         if cache_key in _api_cache:
@@ -930,10 +931,10 @@ class KitsuFetcher(EpisodeFetcher):
         _api_cache[cache_key] = None
         return None
 
-    def _fetch_all_pages(self, url: str, params: Optional[dict] = None) -> list[dict]:
+    def _fetch_all_pages(self, url: str, params: dict | None = None) -> list[dict]:
         """Fetch all pages of a paginated Kitsu API response."""
         all_data: list[dict] = []
-        current_url: Optional[str] = url
+        current_url: str | None = url
         current_params = params
         page = 0
 
@@ -970,7 +971,7 @@ class KitsuFetcher(EpisodeFetcher):
 
     # ── Search by name ─────────────────────────────────────
 
-    def find_series(self, name: str) -> Optional[tuple[int, str]]:
+    def find_series(self, name: str) -> tuple[int, str] | None:
         """
         Search Kitsu for an anime by name.
 
@@ -991,8 +992,8 @@ class KitsuFetcher(EpisodeFetcher):
             log.warning("Kitsu search returned no results for '%s'.", name)
             return None
 
-        best_id: Optional[int] = None
-        best_title: Optional[str] = None
+        best_id: int | None = None
+        best_title: str | None = None
         best_score: float = 0.0
 
         for anime in data["data"]:
@@ -1021,6 +1022,8 @@ class KitsuFetcher(EpisodeFetcher):
             )
             return None
 
+        if best_title is None:
+            return None
         chosen = anime_title_case(best_title)
 
         # Cache the ID so fetch() can use it
@@ -1036,7 +1039,7 @@ class KitsuFetcher(EpisodeFetcher):
         )
         return best_id, chosen
 
-    def find_romaji(self, name: str) -> Optional[str]:
+    def find_romaji(self, name: str) -> str | None:
         """Search Kitsu by name and return the romaji title."""
         result = self.find_series(name)
         return result[1] if result else None
@@ -1086,7 +1089,7 @@ class KitsuFetcher(EpisodeFetcher):
             for inc in rel_data.get("included", []):
                 included_map[(inc.get("type"), inc.get("id"))] = inc
 
-            sequel_id: Optional[int] = None
+            sequel_id: int | None = None
 
             for rel in rel_data["data"]:
                 rel_attrs = rel.get("attributes", {})
@@ -1155,7 +1158,7 @@ class KitsuFetcher(EpisodeFetcher):
 
     # ── Episode fetching ───────────────────────────────────
 
-    def fetch(self) -> Optional[dict[int, EpisodeInfo]]:
+    def fetch(self) -> dict[int, EpisodeInfo] | None:
         """
         Fetch episode data for ALL discovered seasons from Kitsu.
 
@@ -1343,7 +1346,7 @@ class RomajiResolver:
             return 0.0
         # Count matching characters in order (LCS-lite)
         longer = max(len(a), len(b))
-        matches = sum(c1 == c2 for c1, c2 in zip(a, b))
+        matches = sum(c1 == c2 for c1, c2 in zip(a, b, strict=False))
         return matches / longer
 
 
@@ -1358,7 +1361,7 @@ class SpecialParser:
     ]
 
     @classmethod
-    def parse(cls, filename: str) -> Optional[int]:
+    def parse(cls, filename: str) -> int | None:
         stem = Path(filename).stem
         for pattern in cls.PATTERNS:
             m = re.search(pattern, stem, re.IGNORECASE)
@@ -1389,7 +1392,7 @@ class EpisodeNumberParser:
     ]
 
     @classmethod
-    def parse_season_episode(cls, filename: str) -> tuple[Optional[int], Optional[int]]:
+    def parse_season_episode(cls, filename: str) -> tuple[int | None, int | None]:
         stem = Path(filename).stem
 
         for pattern in cls.SEASON_EP_PATTERNS:
@@ -1400,7 +1403,7 @@ class EpisodeNumberParser:
         return None, None
 
     @classmethod
-    def parse(cls, filename: str) -> Optional[int]:
+    def parse(cls, filename: str) -> int | None:
         stem = Path(filename).stem
         for _label, pattern in cls.PATTERNS:
             m = re.search(pattern, stem, re.IGNORECASE)
@@ -1435,7 +1438,7 @@ class SeriesCache:
     def path(self) -> Path:
         return self._path
 
-    def load(self) -> Optional[dict]:
+    def load(self) -> dict | None:
         """
         Load cached series info from the media directory.
         Returns None if the cache doesn't exist or is invalid.
@@ -1464,7 +1467,7 @@ class SeriesCache:
         log.info(
             "Loaded series cache: '%s' (provider=%s, TMDB id=%s, AniList id=%s, Kitsu id=%s)",
             data.get("series_name"),
-            data.get("provider").value,
+            data["provider"].value,
             data.get("tmdb_series_id"),
             data.get("anilist_id"),
             data.get("kitsu_id"),
@@ -1475,9 +1478,9 @@ class SeriesCache:
         self,
         series_name: str,
         provider: Provider = Provider.TMDB,
-        tmdb_series_id: Optional[int] = None,
-        anilist_id: Optional[int] = None,
-        kitsu_id: Optional[int] = None,
+        tmdb_series_id: int | None = None,
+        anilist_id: int | None = None,
+        kitsu_id: int | None = None,
     ) -> None:
         """
         Persist resolved series metadata to the media directory.
@@ -1557,7 +1560,7 @@ class AnimeRenamer:
     def __init__(
         self,
         cfg: Config,
-        rename_via_qbit: Optional[Callable] = None,
+        rename_via_qbit: Callable | None = None,
     ):
         self._cfg = cfg
         self._history = RenameHistory(cfg.history_file)
@@ -1579,8 +1582,8 @@ class AnimeRenamer:
         # ── Step 1: Try loading from folder cache ──────────────────
         needs_resolve = (
             (self._cfg.PROVIDER == Provider.TMDB and self._cfg.TMDB_SERIES_ID is None)
-            or (self._cfg.PROVIDER == Provider.AniList and self._cfg.ANILIST_ID is None)
-            or (self._cfg.PROVIDER == Provider.Kitsu and self._cfg.KITSU_ID is None)
+            or (Provider.AniList == self._cfg.PROVIDER and self._cfg.ANILIST_ID is None)
+            or (Provider.Kitsu == self._cfg.PROVIDER and self._cfg.KITSU_ID is None)
         )
 
         if needs_resolve:
@@ -1618,22 +1621,24 @@ class AnimeRenamer:
         if (
             needs_resolve
             or (self._cfg.PROVIDER == Provider.TMDB and self._cfg.TMDB_SERIES_ID is None)
-            or (self._cfg.PROVIDER == Provider.AniList and self._cfg.ANILIST_ID is None)
-            or (self._cfg.PROVIDER == Provider.Kitsu and self._cfg.KITSU_ID is None)
+            or (Provider.AniList == self._cfg.PROVIDER and self._cfg.ANILIST_ID is None)
+            or (Provider.Kitsu == self._cfg.PROVIDER and self._cfg.KITSU_ID is None)
         ):
-            if self._cfg.PROVIDER == Provider.AniList:
+            if Provider.AniList == self._cfg.PROVIDER:
                 self._resolve_via_anilist(cache)
-            elif self._cfg.PROVIDER == Provider.Kitsu:
+            elif Provider.Kitsu == self._cfg.PROVIDER:
                 self._resolve_via_kitsu(cache)
             else:
                 self._resolve_via_tmdb(cache)
 
         # ── Step 3: Build the episode map using the selected provider ──────
-        if self._cfg.PROVIDER == Provider.AniList:
+        if Provider.AniList == self._cfg.PROVIDER:
             fetcher = AniListFetcher(anime_id=self._cfg.ANILIST_ID)
-        elif self._cfg.PROVIDER == Provider.Kitsu:
+        elif Provider.Kitsu == self._cfg.PROVIDER:
             fetcher = KitsuFetcher(kitsu_id=self._cfg.KITSU_ID)
         else:
+            if self._cfg.TMDB_SERIES_ID is None:
+                raise ValueError("TMDB_SERIES_ID is required when using TMDB provider")
             fetcher = TMDBFetcher(
                 self._cfg.TMDB_API_KEY,
                 self._cfg.TMDB_SERIES_ID,
@@ -1905,7 +1910,7 @@ class AnimeRenamer:
 
                 # Fallback: season number exceeds TMDB seasons → use latest season
                 if not info:
-                    max_season = max((s for s, e in season_ep_map.keys()), default=1)
+                    max_season = max((s for s, e in season_ep_map), default=1)
                     if season_num > max_season:
                         info = season_ep_map.get((max_season, ep_num))
                         if info:

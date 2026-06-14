@@ -53,10 +53,12 @@ class TestDryRun:
         ep_map = _make_episode_map("First", "Second", "Third")
         renamer = AnimeRenamer(cfg)
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             results = renamer._process_files(ep_map, {}, dry_run=True)
 
         assert len(results) == 3
@@ -67,10 +69,12 @@ class TestDryRun:
         renamer = AnimeRenamer(cfg)
         original_names = {p.name for p in media_dir.iterdir()}
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             renamer._process_files(ep_map, {}, dry_run=True)
 
         assert {p.name for p in media_dir.iterdir()} == original_names
@@ -81,10 +85,12 @@ class TestLiveRename:
         ep_map = _make_episode_map("First", "Second", "Third")
         renamer = AnimeRenamer(cfg)
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             results = renamer._process_files(ep_map, {}, dry_run=False)
 
         assert all(r.success for r in results)
@@ -100,10 +106,12 @@ class TestLiveRename:
         ep_map = _make_episode_map("Alpha", "Beta", "Gamma")
         renamer = AnimeRenamer(cfg)
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             renamer._process_files(ep_map, {}, dry_run=False)
 
         assert cfg.history_file.exists()
@@ -124,10 +132,12 @@ class TestOrganiseIntoFolders:
         ep_map = _make_episode_map("First")
         renamer = AnimeRenamer(cfg)
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             renamer._process_files(ep_map, {}, dry_run=False)
 
         assert (tmp_path / "Season 1").is_dir()
@@ -139,10 +149,12 @@ class TestUndo:
         ep_map = _make_episode_map("First", "Second", "Third")
         renamer = AnimeRenamer(cfg)
 
-        with patch.object(renamer, "_auto_search_series"), \
-             patch.object(renamer, "_load_cache"), \
-             patch.object(renamer, "_save_cache"), \
-             patch.object(renamer, "_cross_reference_ids"):
+        with (
+            patch.object(renamer, "_auto_search_series"),
+            patch.object(renamer, "_load_cache"),
+            patch.object(renamer, "_save_cache"),
+            patch.object(renamer, "_cross_reference_ids"),
+        ):
             renamer._process_files(ep_map, {}, dry_run=False)
 
         original_names = {"Show 01.mkv", "Show 02.mkv", "Show 03.mkv"}

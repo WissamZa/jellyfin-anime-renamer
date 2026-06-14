@@ -42,7 +42,7 @@ class EpisodeInfo:
     """Normalised episode metadata returned by every provider."""
 
     absolute: int
-    season: int       # 0 = special / OVA
+    season: int  # 0 = special / OVA
     episode: int
     title: str
     air_date: str = ""
@@ -238,9 +238,7 @@ class EpisodeFetcher(ABC):
                     result = r.json()
                     break
                 if r.status_code == 429:
-                    wait = int(
-                        r.headers.get("Retry-After", _cfg.retry_delay * attempt)
-                    )
+                    wait = int(r.headers.get("Retry-After", _cfg.retry_delay * attempt))
                     log.warning("Rate-limited — retrying in %ss …", wait)
                     time.sleep(wait)
                     continue
@@ -251,7 +249,9 @@ class EpisodeFetcher(ABC):
                 if 400 <= r.status_code < 500:
                     break  # non-transient client error
             except requests.exceptions.ConnectionError:
-                log.warning("Connection error (attempt %d/%d): %s", attempt, _cfg.retry_attempts, url)
+                log.warning(
+                    "Connection error (attempt %d/%d): %s", attempt, _cfg.retry_attempts, url
+                )
             except requests.exceptions.Timeout:
                 log.warning("Timeout (attempt %d/%d): %s", attempt, _cfg.retry_attempts, url)
             except requests.exceptions.RequestException as exc:

@@ -26,6 +26,7 @@ log = get_logger(__name__)
 # Data class for a resolved poster URL
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PosterResult:
     """A resolved poster image URL with metadata about its source."""
@@ -39,6 +40,7 @@ class PosterResult:
 # ---------------------------------------------------------------------------
 # TMDB poster fetcher
 # ---------------------------------------------------------------------------
+
 
 def fetch_tmdb_poster(cfg: Config) -> PosterResult | None:
     """
@@ -155,6 +157,7 @@ def fetch_anilist_poster(cfg: Config) -> PosterResult | None:
 # Kitsu poster fetcher
 # ---------------------------------------------------------------------------
 
+
 def fetch_kitsu_poster(cfg: Config) -> PosterResult | None:
     """
     Fetch the poster URL for the configured series from Kitsu.
@@ -183,17 +186,16 @@ def fetch_kitsu_poster(cfg: Config) -> PosterResult | None:
     poster = attrs.get("posterImage", {})
 
     # Kitsu provides: original, large, medium, small, tiny
-    url = (
-        poster.get("original")
-        or poster.get("large")
-        or poster.get("medium")
-    )
+    url = poster.get("original") or poster.get("large") or poster.get("medium")
     if url:
         return PosterResult(
             url=url,
             provider="kitsu",
             width=poster.get("meta", {}).get("dimensions", {}).get("original", {}).get("width", 0),
-            height=poster.get("meta", {}).get("dimensions", {}).get("original", {}).get("height", 0),
+            height=poster.get("meta", {})
+            .get("dimensions", {})
+            .get("original", {})
+            .get("height", 0),
         )
 
     log.info("Kitsu: no poster found for anime id=%s", kitsu_id)
@@ -203,6 +205,7 @@ def fetch_kitsu_poster(cfg: Config) -> PosterResult | None:
 # ---------------------------------------------------------------------------
 # Unified fetch: try all providers, return the best result
 # ---------------------------------------------------------------------------
+
 
 def fetch_poster(cfg: Config) -> PosterResult | None:
     """
@@ -227,7 +230,8 @@ def fetch_poster(cfg: Config) -> PosterResult | None:
         if result:
             log.info(
                 "Poster found via %s (primary): %s",
-                result.provider, result.url,
+                result.provider,
+                result.url,
             )
             return result
 
@@ -240,7 +244,8 @@ def fetch_poster(cfg: Config) -> PosterResult | None:
             if result:
                 log.info(
                     "Poster found via %s (fallback): %s",
-                    result.provider, result.url,
+                    result.provider,
+                    result.url,
                 )
                 return result
         except Exception as exc:
@@ -253,6 +258,7 @@ def fetch_poster(cfg: Config) -> PosterResult | None:
 # ---------------------------------------------------------------------------
 # Minimal EpisodeFetcher subclass just for its HTTP _get helper
 # ---------------------------------------------------------------------------
+
 
 class _IconGetHelper(EpisodeFetcher):
     """Minimal fetcher subclass to reuse the shared _get() HTTP helper."""

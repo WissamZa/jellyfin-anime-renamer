@@ -7,16 +7,14 @@ Unit tests for RenameHistory and SeriesCache.
 import json
 from pathlib import Path
 
-import pytest
-
 from renamer.cache import SeriesCache
 from renamer.config import Provider
 from renamer.history import RenameHistory
 
-
 # ---------------------------------------------------------------------------
 # RenameHistory
 # ---------------------------------------------------------------------------
+
 
 class TestRenameHistory:
     def test_load_returns_empty_if_no_file(self, tmp_path):
@@ -78,6 +76,7 @@ class TestRenameHistory:
 # ---------------------------------------------------------------------------
 # SeriesCache
 # ---------------------------------------------------------------------------
+
 
 class TestSeriesCache:
     def test_load_returns_none_if_no_cache(self, tmp_path):

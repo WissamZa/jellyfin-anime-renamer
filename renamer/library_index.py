@@ -118,13 +118,7 @@ class LibraryIndex:
 
         for path_str, entry in self._data.items():
             matched = False
-            if tmdb_id    is not None and entry.get("tmdb_id")    == tmdb_id:
-                matched = True
-            elif anilist_id is not None and entry.get("anilist_id") == anilist_id:
-                matched = True
-            elif kitsu_id   is not None and entry.get("kitsu_id")   == kitsu_id:
-                matched = True
-            elif anidb_aid  is not None and entry.get("anidb_aid")  == anidb_aid:
+            if tmdb_id is not None and entry.get("tmdb_id") == tmdb_id or anilist_id is not None and entry.get("anilist_id") == anilist_id or kitsu_id is not None and entry.get("kitsu_id") == kitsu_id or anidb_aid is not None and entry.get("anidb_aid") == anidb_aid:
                 matched = True
 
             if not matched:
@@ -134,7 +128,8 @@ class LibraryIndex:
             if folder.is_dir():
                 log.info(
                     "Library index match: '%s' at %s",
-                    entry.get("name", folder.name), path_str,
+                    entry.get("name", folder.name),
+                    path_str,
                 )
                 return folder
 
@@ -159,10 +154,10 @@ class LibraryIndex:
         folder: Path,
         name: str,
         *,
-        tmdb_id:    int | None = None,
+        tmdb_id: int | None = None,
         anilist_id: int | None = None,
-        kitsu_id:   int | None = None,
-        anidb_aid:  int | None = None,
+        kitsu_id: int | None = None,
+        anidb_aid: int | None = None,
     ) -> None:
         """
         Upsert an entry for *folder*.
@@ -175,17 +170,20 @@ class LibraryIndex:
 
         entry: dict[str, Any] = {
             "name": name,
-            "tmdb_id":    tmdb_id    if tmdb_id    is not None else existing.get("tmdb_id"),
+            "tmdb_id": tmdb_id if tmdb_id is not None else existing.get("tmdb_id"),
             "anilist_id": anilist_id if anilist_id is not None else existing.get("anilist_id"),
-            "kitsu_id":   kitsu_id   if kitsu_id   is not None else existing.get("kitsu_id"),
-            "anidb_aid":  anidb_aid  if anidb_aid  is not None else existing.get("anidb_aid"),
+            "kitsu_id": kitsu_id if kitsu_id is not None else existing.get("kitsu_id"),
+            "anidb_aid": anidb_aid if anidb_aid is not None else existing.get("anidb_aid"),
             "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         }
         self._data[path_str] = entry
         log.debug(
             "Library index: upserted '%s' (TMDB=%s AL=%s Kitsu=%s AniDB=%s)",
-            folder.name, entry["tmdb_id"], entry["anilist_id"],
-            entry["kitsu_id"], entry["anidb_aid"],
+            folder.name,
+            entry["tmdb_id"],
+            entry["anilist_id"],
+            entry["kitsu_id"],
+            entry["anidb_aid"],
         )
 
     def remove(self, folder: Path) -> bool:
@@ -252,7 +250,9 @@ class LibraryIndex:
         self.save()
         log.info(
             "Library index rebuilt: %d entries from %s (total: %d)",
-            count, base_path, len(self._data),
+            count,
+            base_path,
+            len(self._data),
         )
         return count
 

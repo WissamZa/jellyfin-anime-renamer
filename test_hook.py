@@ -21,11 +21,26 @@ load_dotenv(Path(__file__).parent / ".env")
 
 
 # ── output helpers ───────────────────────────────────────
-def ok(msg: str)   -> None: print(f"  PASS  {msg}")
-def fail(msg: str) -> None: print(f"  FAIL  {msg}")
-def info(msg: str) -> None: print(f"        {msg}")
-def warn(msg: str) -> None: print(f"        {msg}")
-def head(msg: str) -> None: print(f"\n{'─'*58}\n  {msg}\n{'─'*58}")
+def ok(msg: str) -> None:
+    print(f"  PASS  {msg}")
+
+
+def fail(msg: str) -> None:
+    print(f"  FAIL  {msg}")
+
+
+def info(msg: str) -> None:
+    print(f"        {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"        {msg}")
+
+
+def head(msg: str) -> None:
+    print(f"\n{'─' * 58}\n  {msg}\n{'─' * 58}")
+
+
 def bail(msg: str) -> NoReturn:
     fail(msg)
     print()
@@ -110,24 +125,20 @@ def step3_find_torrent(sess: requests.Session, env: dict) -> dict:
 
     url = env["QBIT_URL"].rstrip("/")
     try:
-        torrents = sess.get(
-            f"{url}/api/v2/torrents/info", timeout=10
-        ).json()
+        torrents = sess.get(f"{url}/api/v2/torrents/info", timeout=10).json()
     except Exception as exc:
         bail(f"Could not fetch torrent list: {exc}")
 
     ok(f"Got {len(torrents)} torrent(s) from qBittorrent")
 
     completed = [
-        t for t in torrents
-        if t["state"] in ("stoppedUP", "uploading", "stalledUP", "pausedUP")
+        t for t in torrents if t["state"] in ("stoppedUP", "uploading", "stalledUP", "pausedUP")
     ]
     info(f"{len(completed)} completed torrent(s) found")
 
     if not completed:
         bail(
-            "No completed torrents found.\n"
-            "  Download and finish at least one torrent, then re-run."
+            "No completed torrents found.\n  Download and finish at least one torrent, then re-run."
         )
 
     target = sorted(completed, key=lambda t: t.get("completion_on", 0), reverse=True)[0]
@@ -212,9 +223,7 @@ def step5_nyaa(torrent: dict) -> str:
 def step6_series_name(nyaa_title: str) -> str:
     head("STEP 6 — Series name extraction")
 
-    TITLE_PATTERN = re.compile(
-        r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+"
-    )
+    TITLE_PATTERN = re.compile(r"\[[^\]]+\]\s+(.+?)(?:\s+\(.*?\))?\s+-\s+[^\[]+")
 
     def sanitize(name: str) -> str:
         return re.sub(r'[<>:"/\\|?*,]', "", name).strip()
@@ -226,9 +235,9 @@ def step6_series_name(nyaa_title: str) -> str:
         return name
 
     cleaned = re.sub(r"^\[[^\]]+\]\s*", "", nyaa_title)
-    cleaned = re.sub(r"\s*-\s*\d+.*$",  "", cleaned)
+    cleaned = re.sub(r"\s*-\s*\d+.*$", "", cleaned)
     cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)
-    name    = sanitize(cleaned)
+    name = sanitize(cleaned)
 
     if name:
         warn(f"Used fallback extraction: '{name}'")
@@ -256,13 +265,12 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
             "  Make sure the renamer/ package is in the same folder."
         )
 
-
     # ── TMDB search
     tmdb_data = requests.get(
         "https://api.themoviedb.org/3/search/tv",
         params={
             "api_key": env["TMDB_API_KEY"],
-            "query":   series_name,
+            "query": series_name,
             "language": "en-US",
         },
         timeout=15,
@@ -276,7 +284,7 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
         info("Search manually at https://www.themoviedb.org/")
         bail("TMDB search failed")
 
-    top     = results[0]
+    top = results[0]
     tmdb_id = top["id"]
     en_name = top["name"]
     ok(f"TMDB top match: id={tmdb_id}  name='{en_name}'")
@@ -292,25 +300,25 @@ def step7_tmdb_and_romaji(series_name: str, env: dict) -> tuple[int, str]:
         params={"api_key": env["TMDB_API_KEY"], "language": "ja"},
         timeout=15,
     )
-    ja_name     = ja_data.json().get("name", en_name) if ja_data.status_code == 200 else en_name
+    ja_name = ja_data.json().get("name", en_name) if ja_data.status_code == 200 else en_name
     tmdb_romaji = _romaniser.to_romaji(ja_name)
     info(f"TMDB Japanese title : '{ja_name}'")
     info(f"pykakasi romanised  : '{tmdb_romaji}'")
 
     # ── AniList romaji
-    anilist    = AniListFetcher()
-    al_romaji  = anilist.find_romaji(series_name)
+    anilist = AniListFetcher()
+    al_romaji = anilist.find_romaji(series_name)
     if al_romaji:
         ok(f"AniList romaji      : '{al_romaji}'")
     else:
         warn("AniList returned no romaji — will rely on pykakasi")
 
     # ── RomajiResolver final decision
-    resolver     = RomajiResolver()
+    resolver = RomajiResolver()
     final_romaji = resolver.resolve(
-        search_name  = series_name,
-        tmdb_romaji  = tmdb_romaji,
-        english_name = en_name,
+        search_name=series_name,
+        tmdb_romaji=tmdb_romaji,
+        english_name=en_name,
     )
     ok(f"Final series name   : '{final_romaji}'")
 
@@ -326,7 +334,7 @@ def step8_rename_probe(sess: requests.Session, env: dict, torrent: dict) -> None
     r = sess.post(
         f"{url}/api/v2/torrents/renameFile",
         data={
-            "hash":    torrent["hash"],
+            "hash": torrent["hash"],
             "oldPath": "__test_probe_old__",
             "newPath": "__test_probe_new__",
         },
@@ -353,11 +361,11 @@ def step8_rename_probe(sess: requests.Session, env: dict, torrent: dict) -> None
 
 # STEP 9 — Dry-run rename preview
 def step9_dry_run(
-    torrent:      dict,
-    tmdb_id:      int,
+    torrent: dict,
+    tmdb_id: int,
     final_romaji: str,
-    series_name:  str,
-    env:          dict,
+    series_name: str,
+    env: dict,
 ) -> None:
     head("STEP 9 — Rename preview (dry run — nothing moves)")
 
@@ -375,7 +383,7 @@ def step9_dry_run(
     except ImportError as exc:
         bail(f"Cannot import renamer package: {exc}")
 
-    anilist    = AniListFetcher()
+    anilist = AniListFetcher()
     anilist_id = anilist.find_id(final_romaji) or anilist.find_id(series_name)
     if anilist_id:
         info(f"AniList ID resolved: {anilist_id}")
@@ -383,12 +391,12 @@ def step9_dry_run(
         warn("Could not resolve AniList ID — episode title fallback disabled")
 
     cfg = Config(
-        tmdb_api_key          = env["TMDB_API_KEY"],
-        series_name           = final_romaji,
-        tmdb_series_id        = tmdb_id,
-        anilist_id            = anilist_id,
-        media_dir             = save_path,
-        organize_into_folders = True,
+        tmdb_api_key=env["TMDB_API_KEY"],
+        series_name=final_romaji,
+        tmdb_series_id=tmdb_id,
+        anilist_id=anilist_id,
+        media_dir=save_path,
+        organize_into_folders=True,
     )
 
     errors = cfg.validate()
@@ -406,8 +414,8 @@ def step9_dry_run(
     results = renamer.run(dry_run=True)
 
     would_rename = [r for r in results if r.success]
-    skipped      = [r for r in results if r.skipped]
-    unmatched    = [r for r in results if not r.success and not r.skipped]
+    skipped = [r for r in results if r.skipped]
+    unmatched = [r for r in results if not r.success and not r.skipped]
 
     print()
     ok(f"Would rename : {len(would_rename)} file(s)")
@@ -422,9 +430,9 @@ def step9_dry_run(
 # SUMMARY
 def summary(torrent: dict, tmdb_id: int, final_romaji: str, env: dict) -> None:
     base = Path(env["BASE_DOWNLOAD_PATH"])
-    print(f"\n{'='*58}")
+    print(f"\n{'=' * 58}")
     print("  ALL STEPS PASSED")
-    print(f"{'='*58}")
+    print(f"{'=' * 58}")
     print()
     print("  To trigger manually right now:")
     print(f'    uv run python qbit_hook.py "{torrent["hash"]}" "{torrent["name"]}"')
@@ -436,17 +444,17 @@ def summary(torrent: dict, tmdb_id: int, final_romaji: str, env: dict) -> None:
     print()
     print("  To watch the hook live:")
     print("    tail -f renamer.log")
-    print(f"{'='*58}\n")
+    print(f"{'=' * 58}\n")
 
 
 # MAIN
 def main() -> None:
-    env          = step1_env()
-    sess         = step2_qbit_login(env)
-    torrent      = step3_find_torrent(sess, env)
-    _            = step4_file_list(sess, env, torrent)
-    nyaa_title   = step5_nyaa(torrent)
-    series_name  = step6_series_name(nyaa_title)
+    env = step1_env()
+    sess = step2_qbit_login(env)
+    torrent = step3_find_torrent(sess, env)
+    _ = step4_file_list(sess, env, torrent)
+    nyaa_title = step5_nyaa(torrent)
+    series_name = step6_series_name(nyaa_title)
     tmdb_id, final_romaji = step7_tmdb_and_romaji(series_name, env)
     step8_rename_probe(sess, env, torrent)
     step9_dry_run(torrent, tmdb_id, final_romaji, series_name, env)

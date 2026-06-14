@@ -5,6 +5,7 @@ This script reads the credentials from your `.env` file.
 """
 
 import sys
+
 from renamer.config import Config
 from renamer.providers.anidb import AniDBClient
 
@@ -20,7 +21,7 @@ def main():
 
     print(f"Testing AniDB connection for user: {cfg.anidb_username}")
     print(f"Configured Client Name: {cfg.anidb_client} (version {cfg.anidb_client_ver})")
-    
+
     # Initialize the real client
     client = AniDBClient(
         username=cfg.anidb_username,
@@ -37,7 +38,7 @@ def main():
         print("\nSUCCESS! Successfully connected and authenticated with AniDB UDP API!")
         if client._session:
             print(f"Session established: {client._session[:6]}...")
-        
+
         # Gracefully logout
         print("Closing the session (logging out)...")
         try:
@@ -47,7 +48,9 @@ def main():
             pass
     else:
         print("\nFAILED: Could not authenticate with AniDB.")
-        print("Check the details above and verify that your username, password, and registered client name are correct.")
+        print(
+            "Check the details above and verify that your username, password, and registered client name are correct."
+        )
         sys.exit(1)
 
 

@@ -4,7 +4,6 @@ providers.romaji_resolver — RomajiResolver (AniList primary, TMDB romaji fallb
 No AniDB step — removed in v5.
 """
 
-
 from renamer.config import get_logger
 
 log = get_logger(__name__)
@@ -23,6 +22,7 @@ class RomajiResolver:
 
     def __init__(self) -> None:
         from renamer.providers.anilist import AniListFetcher
+
         self._anilist = AniListFetcher()
 
     def resolve(
@@ -38,7 +38,9 @@ class RomajiResolver:
             similarity = self._similarity(tmdb_romaji, anilist_romaji)
             log.info(
                 "Romaji comparison — TMDB: '%s'  AniList: '%s'  similarity: %.0f%%",
-                tmdb_romaji, anilist_romaji, similarity * 100,
+                tmdb_romaji,
+                anilist_romaji,
+                similarity * 100,
             )
             if similarity >= 0.80:
                 log.info(
@@ -47,9 +49,10 @@ class RomajiResolver:
                 )
             else:
                 log.info(
-                    "Low similarity (%.0f%%) — preferring AniList: '%s'  "
-                    "(TMDB was: '%s')",
-                    similarity * 100, anilist_romaji, tmdb_romaji,
+                    "Low similarity (%.0f%%) — preferring AniList: '%s'  (TMDB was: '%s')",
+                    similarity * 100,
+                    anilist_romaji,
+                    tmdb_romaji,
                 )
             return anilist_romaji
 

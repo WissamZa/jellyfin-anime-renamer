@@ -23,6 +23,7 @@ from renamer.renamer import (
 # sanitize_name
 # ---------------------------------------------------------------------------
 
+
 class TestSanitizeName:
     def test_removes_illegal_chars(self):
         assert sanitize_name('Show: "Title"') == "Show Title"
@@ -50,6 +51,7 @@ class TestSanitizeName:
 # _clean_special_title
 # ---------------------------------------------------------------------------
 
+
 class TestCleanSpecialTitle:
     def test_removes_resolution_bracket(self):
         result = _clean_special_title("OVA [1080p][SubGroup]")
@@ -69,16 +71,20 @@ class TestCleanSpecialTitle:
 # _format_episode_number
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("n,expected", [
-    (1, "01"),
-    (9, "09"),
-    (10, "10"),
-    (99, "99"),
-    (100, "100"),
-    (999, "999"),
-    (1000, "1000"),
-    (1200, "1200"),
-])
+
+@pytest.mark.parametrize(
+    "n,expected",
+    [
+        (1, "01"),
+        (9, "09"),
+        (10, "10"),
+        (99, "99"),
+        (100, "100"),
+        (999, "999"),
+        (1000, "1000"),
+        (1200, "1200"),
+    ],
+)
 def test_format_episode_number(n, expected):
     assert _format_episode_number(n) == expected
 
@@ -86,6 +92,7 @@ def test_format_episode_number(n, expected):
 # ---------------------------------------------------------------------------
 # _compute_display_episode
 # ---------------------------------------------------------------------------
+
 
 class TestComputeDisplayEpisode:
     def _info(self, season=1, episode=5, absolute=17):
@@ -121,28 +128,35 @@ class TestComputeDisplayEpisode:
 # EpisodeNumberParser
 # ---------------------------------------------------------------------------
 
+
 class TestEpisodeNumberParser:
     @pytest.fixture
     def parser(self):
         return EpisodeNumberParser()
 
-    @pytest.mark.parametrize("filename,expected", [
-        ("Show S01E05.mkv", 5),
-        ("Show - 1080p - [SubGroup] - ep 42.mkv", 42),
-        ("Show [1105].mkv", 1105),
-        ("Show - 27.mkv", 27),
-        ("unrecognised.mkv", None),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            ("Show S01E05.mkv", 5),
+            ("Show - 1080p - [SubGroup] - ep 42.mkv", 42),
+            ("Show [1105].mkv", 1105),
+            ("Show - 27.mkv", 27),
+            ("unrecognised.mkv", None),
+        ],
+    )
     def test_parse(self, parser, filename, expected):
         assert parser.parse(filename) == expected
 
-    @pytest.mark.parametrize("filename,expected_season,expected_ep", [
-        ("Show S02E15.mkv", 2, 15),
-        ("Show 2x08.mkv", 2, 8),
-        ("Show Season 3 - 05.mkv", 3, 5),
-        ("Show S00E03.mkv", 0, 3),
-        ("no_season.mkv", None, None),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected_season,expected_ep",
+        [
+            ("Show S02E15.mkv", 2, 15),
+            ("Show 2x08.mkv", 2, 8),
+            ("Show Season 3 - 05.mkv", 3, 5),
+            ("Show S00E03.mkv", 0, 3),
+            ("no_season.mkv", None, None),
+        ],
+    )
     def test_parse_season_episode(self, parser, filename, expected_season, expected_ep):
         s, e = parser.parse_season_episode(filename)
         assert s == expected_season
@@ -153,15 +167,19 @@ class TestEpisodeNumberParser:
 # SpecialParser
 # ---------------------------------------------------------------------------
 
+
 class TestSpecialParser:
-    @pytest.mark.parametrize("filename,expected", [
-        ("Show SP1.mkv", 1),
-        ("Show OVA 3.mkv", 3),
-        ("Show OVA.mkv", 0),
-        ("Show NCOP.mkv", 0),
-        ("Show Episode 5.mkv", None),
-        ("Show S01E02.mkv", None),
-    ])
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            ("Show SP1.mkv", 1),
+            ("Show OVA 3.mkv", 3),
+            ("Show OVA.mkv", 0),
+            ("Show NCOP.mkv", 0),
+            ("Show Episode 5.mkv", None),
+            ("Show S01E02.mkv", None),
+        ],
+    )
     def test_parse(self, filename, expected):
         assert SpecialParser.parse(filename) == expected
 
@@ -169,6 +187,7 @@ class TestSpecialParser:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
 
 class TestConfig:
     def test_default_provider_is_tmdb(self):
@@ -199,6 +218,7 @@ class TestConfig:
 # RenameResult
 # ---------------------------------------------------------------------------
 
+
 class TestRenameResult:
     def _info(self):
         return EpisodeInfo(absolute=1, season=1, episode=1, title="Title")
@@ -219,6 +239,7 @@ class TestRenameResult:
 # ---------------------------------------------------------------------------
 # AnimeRenamer._compute_season_offsets
 # ---------------------------------------------------------------------------
+
 
 class TestComputeSeasonOffsets:
     def _make_map(self, *seasons_with_eps):

@@ -162,8 +162,12 @@ def auto_fix_sensitive_permissions(base_dir: Path) -> int:
             st = path.stat()
             mode = st.st_mode
             # Check if file is readable/writable by group or others
-            if ((mode & stat.S_IRGRP) or (mode & stat.S_IROTH) or \
-               (mode & stat.S_IWGRP) or (mode & stat.S_IWOTH)) and fix_file_permissions(path):
+            if (
+                (mode & stat.S_IRGRP)
+                or (mode & stat.S_IROTH)
+                or (mode & stat.S_IWGRP)
+                or (mode & stat.S_IWOTH)
+            ) and fix_file_permissions(path):
                 fixed += 1
         except OSError:
             pass
@@ -185,26 +189,26 @@ def redact_log_message(message: str) -> str:
     """
     # Redact AniDB session key
     message = re.sub(
-        r's=[A-Za-z0-9]{4,}',
-        lambda m: f's=****{m.group()[-4:]}',
+        r"s=[A-Za-z0-9]{4,}",
+        lambda m: f"s=****{m.group()[-4:]}",
         message,
     )
     # Redact password in AUTH
     message = re.sub(
-        r'password=[^\s&]+',
-        'password=****',
+        r"password=[^\s&]+",
+        "password=****",
         message,
     )
     # Redact API keys
     message = re.sub(
-        r'api_key=[^\s&]+',
-        'api_key=****',
+        r"api_key=[^\s&]+",
+        "api_key=****",
         message,
     )
     # Redact pass= parameters
     message = re.sub(
-        r'pass=[^\s&]+',
-        'pass=****',
+        r"pass=[^\s&]+",
+        "pass=****",
         message,
     )
     return message
@@ -222,35 +226,54 @@ def sanitize_filename(name: str) -> str:
       - Limits length to 200 characters
     """
     # Remove null bytes and control characters
-    name = re.sub(r'[\x00-\x1f\x7f]', '', name)
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
 
     # Remove path separators
-    name = name.replace('/', '').replace('\\', '')
+    name = name.replace("/", "").replace("\\", "")
 
     # Remove leading/trailing dots and spaces
-    name = name.strip('. ')
+    name = name.strip(". ")
 
     # Check for DOS reserved names
     dos_reserved = {
-        'CON', 'PRN', 'AUX', 'NUL',
-        'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
-        'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
     }
-    stem = name.rsplit('.', 1)[0].upper() if '.' in name else name.upper()
+    stem = name.rsplit(".", 1)[0].upper() if "." in name else name.upper()
     if stem in dos_reserved:
-        name = f'_{name}'
+        name = f"_{name}"
 
     # Block path traversal attempts
-    if '..' in name:
-        name = name.replace('..', '')
+    if ".." in name:
+        name = name.replace("..", "")
 
     # Limit length
     if len(name) > 200:
         # Preserve extension if present
-        if '.' in name:
-            base, ext = name.rsplit('.', 1)
-            name = f'{base[:200 - len(ext) - 1]}.{ext}'
+        if "." in name:
+            base, ext = name.rsplit(".", 1)
+            name = f"{base[: 200 - len(ext) - 1]}.{ext}"
         else:
             name = name[:200]
 
-    return name or '_'
+    return name or "_"

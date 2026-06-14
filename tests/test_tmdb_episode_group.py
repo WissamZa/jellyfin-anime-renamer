@@ -287,12 +287,12 @@ class TestAbsoluteGroupNumberingDetection:
         groups: list[dict[str, Any]] = [
             {
                 "name": "Season 1",
-                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)]
+                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)],
             },
             {
                 "name": "Season 2",
-                "episodes": [{"episode_number": i, "season_number": 2} for i in range(9, 31)]
-            }
+                "episodes": [{"episode_number": i, "season_number": 2} for i in range(9, 31)],
+            },
         ]
 
         # Check logic inside fetch_episode_group_details
@@ -321,12 +321,12 @@ class TestAbsoluteGroupNumberingDetection:
         groups: list[dict[str, Any]] = [
             {
                 "name": "Season 1",
-                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)]
+                "episodes": [{"episode_number": i, "season_number": 1} for i in range(1, 9)],
             },
             {
                 "name": "Season 2",
-                "episodes": [{"episode_number": i, "season_number": 2} for i in range(1, 10)]
-            }
+                "episodes": [{"episode_number": i, "season_number": 2} for i in range(1, 10)],
+            },
         ]
 
         has_absolute_group_nums = False

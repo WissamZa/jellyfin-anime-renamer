@@ -39,11 +39,11 @@ _LOGGERS_CONFIGURED: set[str] = set()
 # ANSI colour codes for terminal output — disabled automatically when stdout
 # is not a TTY (e.g. when piped or redirected).
 _LEVEL_COLOURS: dict[int, str] = {
-    logging.DEBUG:    "\033[90m",   # dark grey
-    logging.INFO:     "\033[0m",    # default
-    logging.WARNING:  "\033[93m",   # yellow
-    logging.ERROR:    "\033[91m",   # red
-    logging.CRITICAL: "\033[97;41m", # white-on-red
+    logging.DEBUG: "\033[90m",  # dark grey
+    logging.INFO: "\033[0m",  # default
+    logging.WARNING: "\033[93m",  # yellow
+    logging.ERROR: "\033[91m",  # red
+    logging.CRITICAL: "\033[97;41m",  # white-on-red
 }
 _RESET = "\033[0m"
 
@@ -217,10 +217,12 @@ class Config:
     absolute_numbering: bool = False
     episode_start_mode: str = START_MODE_PER_SEASON
     episode_title_lang: str = TITLE_LANG_ROMAJI  # romaji or english episode titles
-    season_arc_names: dict[int, str] = field(default_factory=dict)  # {season_num: "East Blue (1-61)"}
-    use_hash: bool = False          # Enable ED2K hash fallback for unidentified files
-    scan_recursive: bool = False    # Scan subfolders recursively
-    scan_depth: int = 3             # Max recursion depth for scanning
+    season_arc_names: dict[int, str] = field(
+        default_factory=dict
+    )  # {season_num: "East Blue (1-61)"}
+    use_hash: bool = False  # Enable ED2K hash fallback for unidentified files
+    scan_recursive: bool = False  # Scan subfolders recursively
+    scan_depth: int = 3  # Max recursion depth for scanning
 
     # ── Naming templates (rarely need changing) ──────────────
     name_template: str = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
@@ -318,17 +320,17 @@ class Config:
             kitsu_id=_int("KITSU_ID"),
             episode_group_id=_str("EPISODE_GROUP_ID") or None,
             media_dir=Path(_str("MEDIA_DIR") or "."),
-            base_download_path=Path(_str("BASE_DOWNLOAD_PATH")) if _str("BASE_DOWNLOAD_PATH") else None,
+            base_download_path=Path(_str("BASE_DOWNLOAD_PATH"))
+            if _str("BASE_DOWNLOAD_PATH")
+            else None,
             organize_into_folders=_bool("ORGANIZE_INTO_FOLDERS", True),
             absolute_numbering=_bool("ABSOLUTE_NUMBERING", False),
             provider=Provider.from_str(provider_raw) if provider_raw else Provider.TMDB,
             episode_start_mode=(
-                start_mode_raw if start_mode_raw in _VALID_START_MODES
-                else START_MODE_PER_SEASON
+                start_mode_raw if start_mode_raw in _VALID_START_MODES else START_MODE_PER_SEASON
             ),
             episode_title_lang=(
-                title_lang_raw if title_lang_raw in _VALID_TITLE_LANGS
-                else TITLE_LANG_ROMAJI
+                title_lang_raw if title_lang_raw in _VALID_TITLE_LANGS else TITLE_LANG_ROMAJI
             ),
             # AniDB credentials
             anidb_username=_str("ANIDB_USERNAME"),
@@ -384,6 +386,7 @@ def _load_dotenv_once() -> None:
         return
     try:
         from dotenv import load_dotenv  # type: ignore[import-untyped]
+
         load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     except ImportError:
         pass  # python-dotenv not installed — rely on real env vars

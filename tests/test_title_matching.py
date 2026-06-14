@@ -4,37 +4,50 @@ tests/test_title_matching.py
 Unit and integration tests for title similarity-based episode matching.
 """
 
-from pathlib import Path
-import pytest
 
+from renamer.config import Config
 from renamer.providers.base import EpisodeInfo, RenameResult
 from renamer.renamer import (
-    _normalize_title,
+    AnimeRenamer,
     _extract_title_suffix,
     _find_best_title_match,
-    AnimeRenamer,
+    _normalize_title,
 )
-from renamer.config import Config
 
 
 def test_normalize_title():
     assert _normalize_title("Come In, World - Vegapunk's Message") == "comeinworldvegapunksmessage"
-    assert _normalize_title("[1080p] Powers on a Different Level! Luffy vs. Lucci (Dual-Audio)") == "powersonadifferentlevelluffyvslucci"
+    assert (
+        _normalize_title("[1080p] Powers on a Different Level! Luffy vs. Lucci (Dual-Audio)")
+        == "powersonadifferentlevelluffyvslucci"
+    )
     assert _normalize_title("One Piece - S22E1141") == "onepieces22e1141"
     assert _normalize_title("ルフィ") == "ルフィ"
 
 
 def test_extract_title_suffix():
-    assert _extract_title_suffix("One Piece - S22E1141 - Come In, World - Vegapunk's Message.mkv") == "Come In, World - Vegapunk's Message"
+    assert (
+        _extract_title_suffix("One Piece - S22E1141 - Come In, World - Vegapunk's Message.mkv")
+        == "Come In, World - Vegapunk's Message"
+    )
     assert _extract_title_suffix("One Piece - 1141 - Come In, World.mkv") == "Come In, World"
     assert _extract_title_suffix("[Subs] One Piece - 1141 [1080p].mkv") == "[1080p]"
-    assert _extract_title_suffix("One Piece S22E1100 The Strongest Form.mkv") == "The Strongest Form"
+    assert (
+        _extract_title_suffix("One Piece S22E1100 The Strongest Form.mkv") == "The Strongest Form"
+    )
 
 
 def test_find_best_title_match():
     ep_map = {
-        1: EpisodeInfo(absolute=1, season=22, episode=56, title="Reliable Reinforcements! Dorry and Brogy Arrive!"),
-        2: EpisodeInfo(absolute=2, season=22, episode=57, title="Come In, World - Vegapunk's Message"),
+        1: EpisodeInfo(
+            absolute=1,
+            season=22,
+            episode=56,
+            title="Reliable Reinforcements! Dorry and Brogy Arrive!",
+        ),
+        2: EpisodeInfo(
+            absolute=2, season=22, episode=57, title="Come In, World - Vegapunk's Message"
+        ),
         3: EpisodeInfo(absolute=3, season=22, episode=58, title="Vegapunk's Secret Plan"),
     }
 
@@ -77,8 +90,15 @@ def test_classify_and_handle_overrides_incorrect_numeric_match(tmp_path):
 
     # Setup maps where original (22, 1141) maps to ep 56 (Reliable Reinforcements)
     # but the filename title matches ep 57 (Come In, World - Vegapunk's Message)
-    ep56 = EpisodeInfo(absolute=1140, season=22, episode=56, title="Reliable Reinforcements! Dorry and Brogy Arrive!")
-    ep57 = EpisodeInfo(absolute=1141, season=22, episode=57, title="Come In, World - Vegapunk's Message")
+    ep56 = EpisodeInfo(
+        absolute=1140,
+        season=22,
+        episode=56,
+        title="Reliable Reinforcements! Dorry and Brogy Arrive!",
+    )
+    ep57 = EpisodeInfo(
+        absolute=1141, season=22, episode=57, title="Come In, World - Vegapunk's Message"
+    )
 
     episode_map = {1140: ep56, 1141: ep57}
     specials_map = {}

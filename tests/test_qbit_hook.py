@@ -3,52 +3,65 @@ tests/test_qbit_hook.py
 =======================
 Tests for qbit_hook utility functions and the LibraryIndex class.
 """
+
 import json
+
 import pytest
-from pathlib import Path
 
-from qbit_hook import normalize_for_matching, find_matching_folder
+from qbit_hook import find_matching_folder, normalize_for_matching
 from renamer.library_index import LibraryIndex, reset_library_index
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # normalize_for_matching
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_normalize_for_matching():
     # Romaji spelling variants
-    assert normalize_for_matching("Jidouhanbaiki ni Umare Kawa Tta Ore ha Meikyuu wo Houkou U") == "jidohanbaikiniumarekawattaorewameikyuohokou"
-    assert normalize_for_matching("Jidouhanbaiki ni Umarekawatta Ore wa Meikyuu o Samayou") == "jidohanbaikiniumarekawattaorewameikyuosamayo"
-    
+    assert (
+        normalize_for_matching("Jidouhanbaiki ni Umare Kawa Tta Ore ha Meikyuu wo Houkou U")
+        == "jidohanbaikiniumarekawattaorewameikyuohokou"
+    )
+    assert (
+        normalize_for_matching("Jidouhanbaiki ni Umarekawatta Ore wa Meikyuu o Samayou")
+        == "jidohanbaikiniumarekawattaorewameikyuosamayo"
+    )
+
     # Season stripping
     base_shingeki = normalize_for_matching("Shingeki no Kyojin")
     assert normalize_for_matching("Shingeki no Kyojin Season 3") == base_shingeki
     assert normalize_for_matching("Shingeki no Kyojin 3rd Season") == base_shingeki
-    
+
     base_mushoku = normalize_for_matching("Mushoku Tensei: Jobless Reincarnation")
-    assert normalize_for_matching("Mushoku Tensei: Jobless Reincarnation Season 2 Part 2") == base_mushoku
-    
+    assert (
+        normalize_for_matching("Mushoku Tensei: Jobless Reincarnation Season 2 Part 2")
+        == base_mushoku
+    )
+
     base_spice = normalize_for_matching("Spice and Wolf: Merchant Meets the Wise Wolf")
-    assert normalize_for_matching("Spice and Wolf: Merchant Meets the Wise Wolf Part II") == base_spice
+    assert (
+        normalize_for_matching("Spice and Wolf: Merchant Meets the Wise Wolf Part II") == base_spice
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # find_matching_folder
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_find_matching_folder(tmp_path):
     # Setup test directories
     base = tmp_path
     target_dir = base / "Jidouhanbaiki ni Umarekawatta Ore wa Meikyuu o Samayou"
     target_dir.mkdir()
-    
+
     # Matching folder should be found even with spelling variations and season suffixes
     matched = find_matching_folder(
         base,
         candidates=[
             "Jidouhanbaiki ni Umare Kawa Tta Ore ha Meikyuu wo Houkou U",
-            "Jidouhanbaiki ni Umare Kawa Tta Ore ha Meikyuu wo Houkou U 2nd Season"
-        ]
+            "Jidouhanbaiki ni Umare Kawa Tta Ore ha Meikyuu wo Houkou U 2nd Season",
+        ],
     )
     assert matched == target_dir
 
@@ -59,6 +72,7 @@ def test_find_matching_folder(tmp_path):
 # ─────────────────────────────────────────────────────────────────────────────
 # LibraryIndex — unit tests
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def _reset_singleton():
@@ -210,9 +224,7 @@ class TestLibraryIndexRebuild:
             "anilist_id": 21,
             "kitsu_id": None,
         }
-        (op_folder / ".series_cache.json").write_text(
-            json.dumps(cache), encoding="utf-8"
-        )
+        (op_folder / ".series_cache.json").write_text(json.dumps(cache), encoding="utf-8")
 
         idx = LibraryIndex(tmp_path / "library_index.json")
         count = idx.rebuild(base)

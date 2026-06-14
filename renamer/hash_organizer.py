@@ -68,6 +68,7 @@ log = get_logger(__name__)
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass
 class FilenameInfo:
     """Series and episode info extracted from a filename."""
@@ -97,13 +98,13 @@ class HashedFile:
 class ResolvedSeries:
     """Series info resolved from a filename via AniList/TMDB search."""
 
-    search_name: str          # Original extracted name from filename
-    romaji_title: str = ""    # Best romaji title from AniList/TMDB
-    english_title: str = ""   # English title from AniList/TMDB
+    search_name: str  # Original extracted name from filename
+    romaji_title: str = ""  # Best romaji title from AniList/TMDB
+    english_title: str = ""  # English title from AniList/TMDB
     anilist_id: int | None = None
     tmdb_id: int | None = None
     episode_titles: dict[int, str] = dataclasses.field(default_factory=dict)
-    source: str = ""          # "anilist", "tmdb", or ""
+    source: str = ""  # "anilist", "tmdb", or ""
 
 
 @dataclasses.dataclass
@@ -158,10 +159,10 @@ _CODEC_BRACKET_RE = re.compile(
 # Regex to strip language/source/hash bracket tags
 _LANG_HASH_RE = re.compile(
     r"\s*\[(?:"
-    r"[A-Z]{2,4}"       # 2-4 letter uppercase codes: JPN, ENG, JA
+    r"[A-Z]{2,4}"  # 2-4 letter uppercase codes: JPN, ENG, JA
     r"|www"
-    r"|v\d+"             # version tags: v2, v3
-    r"|[0-9A-Fa-f]{6,8}" # 6-8 char hex hash: 8B6A5238, D8F2303A
+    r"|v\d+"  # version tags: v2, v3
+    r"|[0-9A-Fa-f]{6,8}"  # 6-8 char hex hash: 8B6A5238, D8F2303A
     r")\s*\]",
     re.IGNORECASE,
 )
@@ -196,11 +197,11 @@ def extract_series_from_filename(filename: str) -> FilenameInfo | None:
     # Try S01E01 pattern first (most specific)
     m = _SEASON_EP_RE.search(cleaned)
     if m:
-        series_part = cleaned[:m.start()].strip()
+        series_part = cleaned[: m.start()].strip()
         season = int(m.group(1))
         episode = int(m.group(2))
         # Check for episode title after the S01E01 match
-        after = cleaned[m.end():].strip()
+        after = cleaned[m.end() :].strip()
         ep_title = ""
         if after.startswith("-"):
             ep_title = after[1:].strip()
@@ -233,7 +234,7 @@ def extract_series_from_filename(filename: str) -> FilenameInfo | None:
     # Try dash-episode: Series - 02
     m = _DASH_EP_RE.search(no_brackets)
     if m:
-        series_part = no_brackets[:m.start()].strip()
+        series_part = no_brackets[: m.start()].strip()
         episode = int(m.group(1))
         series_name = _clean_extracted_name(series_part)
         if series_name:
@@ -250,7 +251,7 @@ def extract_series_from_filename(filename: str) -> FilenameInfo | None:
         # Avoid matching resolution-like brackets [1080] or year [2024]
         ep_val = int(ep_str)
         if ep_val < 100:  # Episode numbers are typically < 100
-            series_part = cleaned[:m.start()].strip()
+            series_part = cleaned[: m.start()].strip()
             series_name = _clean_extracted_name(series_part)
             if series_name:
                 return FilenameInfo(
@@ -283,6 +284,7 @@ def _clean_extracted_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 # Core organizer
 # ---------------------------------------------------------------------------
+
 
 class HashOrganizer:
     """
@@ -331,7 +333,8 @@ class HashOrganizer:
 
         # Step 1: Scan for video files
         video_files = sorted(
-            p for p in media_dir.rglob("*")
+            p
+            for p in media_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in self._cfg.video_extensions
         )
 
@@ -379,11 +382,15 @@ class HashOrganizer:
                 if api_info:
                     self._cache.set(api_info)
                     info = api_info
-                    print(f"OK -> {info.anime_title_romaji or info.anime_title_english} E{info.episode_number}")
+                    print(
+                        f"OK -> {info.anime_title_romaji or info.anime_title_english} E{info.episode_number}"
+                    )
                 else:
                     print("not found on AniDB")
             elif info:
-                print(f"  Cache hit [{i}/{len(hashed)}]: {hf.path.name} -> {info.anime_title_romaji or info.anime_title_english} E{info.episode_number}")
+                print(
+                    f"  Cache hit [{i}/{len(hashed)}]: {hf.path.name} -> {info.anime_title_romaji or info.anime_title_english} E{info.episode_number}"
+                )
 
             if info and info.aid:
                 hf.info = info
@@ -400,8 +407,10 @@ class HashOrganizer:
                     self._result.identified_by_filename += 1
                     log.info(
                         "Filename fallback: %s -> %s S%02dE%02d",
-                        hf.path.name, fname_info.series_name,
-                        fname_info.season, fname_info.episode,
+                        hf.path.name,
+                        fname_info.series_name,
+                        fname_info.season,
+                        fname_info.episode,
                     )
                 else:
                     self._result.unidentified += 1
@@ -435,9 +444,11 @@ class HashOrganizer:
 
         print(f"\n{'═' * 60}")
         print("  HASH-ORGANIZE PREVIEW")
-        print(f"  Total: {result.total_files} | Identified: {result.identified} "
-              f"(hash: {result.identified_by_hash}, filename: {result.identified_by_filename}) | "
-              f"Unidentified: {result.unidentified} | Series: {result.series_count}")
+        print(
+            f"  Total: {result.total_files} | Identified: {result.identified} "
+            f"(hash: {result.identified_by_hash}, filename: {result.identified_by_filename}) | "
+            f"Unidentified: {result.unidentified} | Series: {result.series_count}"
+        )
         print(f"{'═' * 60}")
 
         for plan in result.plans:
@@ -448,7 +459,9 @@ class HashOrganizer:
                 if hf.identified_method == "anidb" and hf.info:
                     ep_num = hf.info.episode_number or "?"
                     ep_title = hf.info.episode_title_en or hf.info.episode_title_romaji or ""
-                    new_name = self._format_filename(plan.display_title, ep_num, ep_title, hf.path.suffix)
+                    new_name = self._format_filename(
+                        plan.display_title, ep_num, ep_title, hf.path.suffix
+                    )
                     print(f"     {hf.path.name}")
                     print(f"       -> Season 01/{new_name}")
                 elif hf.identified_method == "filename" and hf.filename_info:
@@ -460,7 +473,9 @@ class HashOrganizer:
                         resolved = self._resolved_cache.get(fi.series_name)
                         if resolved and resolved.episode_titles:
                             ep_title = resolved.episode_titles.get(fi.episode, "")
-                    new_name = self._format_filename(plan.display_title, str(fi.episode), ep_title, hf.path.suffix)
+                    new_name = self._format_filename(
+                        plan.display_title, str(fi.episode), ep_title, hf.path.suffix
+                    )
                     print(f"     {hf.path.name}")
                     print(f"       -> Season {fi.season:02d}/{new_name}")
                 else:
@@ -529,7 +544,9 @@ class HashOrganizer:
                 if not dry_run:
                     season_folder.mkdir(parents=True, exist_ok=True)
 
-                new_name = self._format_filename(plan.display_title, ep_num, ep_title, hf.path.suffix)
+                new_name = self._format_filename(
+                    plan.display_title, ep_num, ep_title, hf.path.suffix
+                )
                 dest_path = season_folder / new_name
 
                 # Check if already at destination
@@ -558,7 +575,9 @@ class HashOrganizer:
                         print(f"  ✓ {hf.path.name}  ->  {rel_dest}")
 
                         # Move matching subtitles
-                        self._move_subtitles(hf.path, dest_path, season_folder, dry_run, session_history)
+                        self._move_subtitles(
+                            hf.path, dest_path, season_folder, dry_run, session_history
+                        )
                     except Exception as exc:
                         log.error("Failed to move %s: %s", hf.path.name, exc)
                         result.errors += 1
@@ -593,7 +612,9 @@ class HashOrganizer:
                         print(f"  ? {hf.path.name}  ->  {self.UNIDENTIFIED_FOLDER}/{hf.path.name}")
 
                         # Move matching subtitles
-                        self._move_subtitles(hf.path, dest_path, unid_folder, dry_run, session_history)
+                        self._move_subtitles(
+                            hf.path, dest_path, unid_folder, dry_run, session_history
+                        )
                     except Exception as exc:
                         log.error("Failed to move %s: %s", hf.path.name, exc)
                         result.errors += 1
@@ -602,7 +623,10 @@ class HashOrganizer:
         # Save undo history
         if not dry_run and session_history:
             from renamer.history import RenameHistory
-            history = RenameHistory(self._media_dir / "rename_history.json", media_dir=self._media_dir)
+
+            history = RenameHistory(
+                self._media_dir / "rename_history.json", media_dir=self._media_dir
+            )
             history.save(session_history)
             log.info("Hash-organize undo log: %s", self._media_dir / "rename_history.json")
 
@@ -610,8 +634,10 @@ class HashOrganizer:
         mode_label = "Would organize" if dry_run else "Organized"
         print(f"\n{'═' * 60}")
         print(f"  HASH-ORGANIZE COMPLETE ({mode})")
-        print(f"  {mode_label}: {result.moved} | Skipped: {result.skipped} | "
-              f"Errors: {result.errors} | Series: {result.series_count}")
+        print(
+            f"  {mode_label}: {result.moved} | Skipped: {result.skipped} | "
+            f"Errors: {result.errors} | Series: {result.series_count}"
+        )
         print(f"{'═' * 60}\n")
 
         return result
@@ -681,6 +707,7 @@ class HashOrganizer:
         # --- Strategy 1: AniList (best romaji quality) ---
         try:
             from renamer.providers.anilist import AniListFetcher
+
             anilist = AniListFetcher()
 
             # Search for the anime and get romaji title
@@ -691,7 +718,9 @@ class HashOrganizer:
                 result.source = "anilist"
                 log.info(
                     "AniList resolved '%s' -> romaji='%s' (id=%s)",
-                    name, romaji, result.anilist_id,
+                    name,
+                    romaji,
+                    result.anilist_id,
                 )
 
                 # Also get English title
@@ -708,12 +737,12 @@ class HashOrganizer:
                     ep_map = anilist.fetch()
                     if ep_map:
                         result.episode_titles = {
-                            ep_info.episode: ep_info.title
-                            for ep_info in ep_map.values()
+                            ep_info.episode: ep_info.title for ep_info in ep_map.values()
                         }
                         log.info(
                             "AniList: got %d episode titles for '%s'",
-                            len(result.episode_titles), romaji,
+                            len(result.episode_titles),
+                            romaji,
                         )
 
                 return result
@@ -725,6 +754,7 @@ class HashOrganizer:
         try:
             if self._cfg.tmdb_api_key:
                 from renamer.providers.tmdb import TMDBSearch
+
                 search = TMDBSearch(self._cfg.tmdb_api_key)
                 found = search.find(name)
                 if found:
@@ -734,11 +764,14 @@ class HashOrganizer:
                     result.source = "tmdb"
                     log.info(
                         "TMDB resolved '%s' -> romaji='%s' (id=%d)",
-                        name, romaji, tmdb_id,
+                        name,
+                        romaji,
+                        tmdb_id,
                     )
 
                     # Also fetch English name from TMDB
                     from renamer.providers.tmdb import _TMDBGetHelper
+
                     helper = _TMDBGetHelper()
                     show_data = helper._get(
                         f"https://api.themoviedb.org/3/tv/{tmdb_id}",
@@ -750,6 +783,7 @@ class HashOrganizer:
                     # Fetch episode titles from TMDB
                     try:
                         from renamer.providers.tmdb import TMDBFetcher
+
                         fetcher = TMDBFetcher(
                             api_key=self._cfg.tmdb_api_key,
                             series_id=tmdb_id,
@@ -758,12 +792,12 @@ class HashOrganizer:
                         ep_map = fetcher.fetch()
                         if ep_map:
                             result.episode_titles = {
-                                ep_info.episode: ep_info.title
-                                for ep_info in ep_map.values()
+                                ep_info.episode: ep_info.title for ep_info in ep_map.values()
                             }
                             log.info(
                                 "TMDB: got %d episode titles for '%s'",
-                                len(result.episode_titles), romaji,
+                                len(result.episode_titles),
+                                romaji,
                             )
                     except Exception as exc:
                         log.warning("TMDB episode fetch failed for '%s': %s", name, exc)
@@ -781,6 +815,7 @@ class HashOrganizer:
                 continue
             try:
                 from renamer.providers.anilist import AniListFetcher
+
                 anilist = AniListFetcher()
                 romaji = anilist.find_romaji(alt_name)
                 if romaji:
@@ -789,7 +824,8 @@ class HashOrganizer:
                     result.source = "anilist-alt"
                     log.info(
                         "AniList (alt search '%s') resolved -> romaji='%s'",
-                        alt_name, romaji,
+                        alt_name,
+                        romaji,
                     )
                     # Get English title
                     media = anilist._gql(
@@ -804,8 +840,7 @@ class HashOrganizer:
                         ep_map = anilist.fetch()
                         if ep_map:
                             result.episode_titles = {
-                                ep_info.episode: ep_info.title
-                                for ep_info in ep_map.values()
+                                ep_info.episode: ep_info.title for ep_info in ep_map.values()
                             }
                     return result
             except Exception:
@@ -815,6 +850,7 @@ class HashOrganizer:
             if self._cfg.tmdb_api_key:
                 try:
                     from renamer.providers.tmdb import TMDBSearch
+
                     search = TMDBSearch(self._cfg.tmdb_api_key)
                     found = search.find(alt_name)
                     if found:
@@ -824,7 +860,8 @@ class HashOrganizer:
                         result.source = "tmdb-alt"
                         log.info(
                             "TMDB (alt search '%s') resolved -> romaji='%s'",
-                            alt_name, romaji,
+                            alt_name,
+                            romaji,
                         )
                         return result
                 except Exception:
@@ -894,8 +931,12 @@ class HashOrganizer:
 
         # Try to connect
         if not self._client.connect():
-            log.error("AniDB: failed to authenticate — falling back to filename-based identification")
-            print("\n  AniDB authentication failed. Falling back to filename-based identification …")
+            log.error(
+                "AniDB: failed to authenticate — falling back to filename-based identification"
+            )
+            print(
+                "\n  AniDB authentication failed. Falling back to filename-based identification …"
+            )
             return None
 
         return self._client
@@ -908,9 +949,19 @@ class HashOrganizer:
         "Season NN" subfolder, since that indicates it was previously
         processed by the renamer.
         """
-        organized_keywords = {"season 01", "season 02", "season 03", "season 04",
-                              "season 05", "season 06", "season 07", "season 08",
-                              "season 09", "season 10", "specials"}
+        organized_keywords = {
+            "season 01",
+            "season 02",
+            "season 03",
+            "season 04",
+            "season 05",
+            "season 06",
+            "season 07",
+            "season 08",
+            "season 09",
+            "season 10",
+            "specials",
+        }
         filtered = []
         for f in files:
             try:
@@ -947,7 +998,9 @@ class HashOrganizer:
             if not first_info:
                 continue
 
-            anime_title = first_info.anime_title_romaji or first_info.anime_title_english or f"AniDB-{aid}"
+            anime_title = (
+                first_info.anime_title_romaji or first_info.anime_title_english or f"AniDB-{aid}"
+            )
             anime_title_english = first_info.anime_title_english or ""
 
             folder_name = sanitize_name(anime_title)

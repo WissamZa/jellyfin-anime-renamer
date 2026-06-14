@@ -177,7 +177,9 @@ class AniDBClient:
             # Step 3: Try known fallback client names
             if self._last_auth_code == 505 or self._last_auth_code == 504:
                 for fallback_name, fallback_ver in _FALLBACK_CLIENTS:
-                    log.info("AniDB: trying fallback client '%s' v%d …", fallback_name, fallback_ver)
+                    log.info(
+                        "AniDB: trying fallback client '%s' v%d …", fallback_name, fallback_ver
+                    )
                     # Reset socket for new attempt
                     if self._socket:
                         self._socket.close()
@@ -242,15 +244,24 @@ class AniDBClient:
             # 200 {session_key} AUTH ACCEPTED
             self._session = data.split()[0] if data else ""
             self._connected = True
-            log.info("AniDB: authenticated as %s (client=%s v%d, session=%s)",
-                     self._username, client_name, client_ver, self._session[:4] + "...")
+            log.info(
+                "AniDB: authenticated as %s (client=%s v%d, session=%s)",
+                self._username,
+                client_name,
+                client_ver,
+                self._session[:4] + "...",
+            )
             return True
 
         if code == 201:
             # 201 {session_key} AUTH ACCEPTED — NEW VERSION AVAILABLE
             self._session = data.split()[0] if data else ""
             self._connected = True
-            log.info("AniDB: authenticated (new version available, client=%s v%d)", client_name, client_ver)
+            log.info(
+                "AniDB: authenticated (new version available, client=%s v%d)",
+                client_name,
+                client_ver,
+            )
             return True
 
         if code == 500:
@@ -278,6 +289,7 @@ class AniDBClient:
         """Send LOGOUT and close the socket."""
         if self._connected and self._session:
             import contextlib
+
             with contextlib.suppress(Exception):  # Best-effort logout
                 self._send_recv(f"LOGOUT s={self._session}", expect_reply=True)
 
@@ -301,7 +313,9 @@ class AniDBClient:
             return None
 
         # FILE command
-        msg = f"FILE size={size}&ed2k={ed2k}&fmask={FILE_FMASK}&amask={FILE_AMASK}&s={self._session}"
+        msg = (
+            f"FILE size={size}&ed2k={ed2k}&fmask={FILE_FMASK}&amask={FILE_AMASK}&s={self._session}"
+        )
         reply = self._send_recv(msg)
 
         if reply is None:
@@ -628,8 +642,7 @@ class AniDBFetcher(EpisodeFetcher):
 
         if not username or not password:
             log.warning(
-                "AniDB credentials not configured. "
-                "Set ANIDB_USERNAME and ANIDB_PASSWORD in .env"
+                "AniDB credentials not configured. Set ANIDB_USERNAME and ANIDB_PASSWORD in .env"
             )
             return None
 
@@ -661,7 +674,8 @@ class AniDBFetcher(EpisodeFetcher):
 
         # Collect all video files recursively
         video_files = sorted(
-            p for p in media_dir.rglob("*")
+            p
+            for p in media_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in cfg.video_extensions
         )
 
@@ -708,7 +722,9 @@ class AniDBFetcher(EpisodeFetcher):
             else:
                 log.warning(
                     "AniDB: could not identify %s (ed2k=%s size=%d)",
-                    f.name, ed2k[:8], size,
+                    f.name,
+                    ed2k[:8],
+                    size,
                 )
 
         if client:
@@ -733,9 +749,7 @@ class AniDBFetcher(EpisodeFetcher):
 
         # Update cfg series name from AniDB data
         series_title = (
-            primary_info.anime_title_romaji
-            or primary_info.anime_title_english
-            or cfg.series_name
+            primary_info.anime_title_romaji or primary_info.anime_title_english or cfg.series_name
         )
         if series_title != cfg.series_name:
             log.info("AniDB: updating series name from %r to %r", cfg.series_name, series_title)
@@ -749,11 +763,7 @@ class AniDBFetcher(EpisodeFetcher):
             if ep_num is None:
                 continue
 
-            title = (
-                info.episode_title_en
-                or info.episode_title_romaji
-                or f"Episode {ep_num}"
-            )
+            title = info.episode_title_en or info.episode_title_romaji or f"Episode {ep_num}"
 
             # For AniDB, we assign season=1 by default (AniDB doesn't
             # always have season info; cross-referencing with TMDB is better)
@@ -796,6 +806,7 @@ class AniDBFetcher(EpisodeFetcher):
             return None  # Credit — skip
         # Try extracting digits
         import re
+
         m = re.search(r"\d+", epno)
         return int(m.group()) if m else None
 

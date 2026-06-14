@@ -136,12 +136,14 @@ def find_matching_subtitles(
     # Collect candidate subtitle files
     if search_recursive:
         candidates = (
-            p for p in media_dir.rglob("*")
+            p
+            for p in media_dir.rglob("*")
             if p.is_file() and p.suffix.lower() in subtitle_extensions
         )
     else:
         candidates = (
-            p for p in search_dir.iterdir()
+            p
+            for p in search_dir.iterdir()
             if p.is_file() and p.suffix.lower() in subtitle_extensions
         )
 
@@ -218,7 +220,8 @@ def rename_subtitle(
     if new_path.exists() and new_path.resolve() != sub_path.resolve():
         log.warning(
             "Subtitle target already exists: %s — skipping %s",
-            new_path, sub_path,
+            new_path,
+            sub_path,
         )
         return None
 
