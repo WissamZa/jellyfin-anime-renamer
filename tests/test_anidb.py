@@ -10,7 +10,10 @@ UDP socket interactions are patched; the SQLite cache uses tmp_path.
 from __future__ import annotations
 
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

@@ -4,6 +4,7 @@ Test script to verify the live connection, authentication, and communication wit
 This script reads the credentials from your `.env` file.
 """
 
+import contextlib
 import sys
 
 from renamer.config import Config
@@ -41,11 +42,8 @@ def main():
 
         # Gracefully logout
         print("Closing the session (logging out)...")
-        try:
+        with contextlib.suppress(AttributeError):
             client.disconnect()
-        except AttributeError:
-            # client.close() or logout if implemented, or let it exit
-            pass
     else:
         print("\nFAILED: Could not authenticate with AniDB.")
         print(

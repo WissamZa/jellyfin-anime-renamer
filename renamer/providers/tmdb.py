@@ -530,17 +530,7 @@ class TMDBFetcher(EpisodeFetcher):
                 if has_absolute_group_nums:
                     actual_abs = orig_ep
                 elif group_abs_start is not None:
-                    if orig_ep >= group_abs_start:
-                        # orig_ep is an absolute episode number — use it
-                        # directly.  This correctly handles extra episodes
-                        # in a group that fall beyond the nominal range
-                        # (e.g. recaps/specials Crunchyroll places in an
-                        # arc group but which have different absolute nums).
-                        actual_abs = orig_ep
-                    else:
-                        # orig_ep is per-season numbering — compute from
-                        # the group's range start + position.
-                        actual_abs = group_abs_start + i
+                    actual_abs = orig_ep if orig_ep >= group_abs_start else group_abs_start + i
                 else:
                     actual_abs = abs_counter
 

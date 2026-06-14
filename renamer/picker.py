@@ -646,7 +646,7 @@ def back_input(prompt: str = "", default: str = "") -> str:
         try:
             raw = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            raise BackSignal()
+            raise BackSignal() from None
         if raw.lower() in ("q", "back", "ctrl+q"):
             raise BackSignal()
         return raw or default
@@ -660,7 +660,7 @@ def back_input(prompt: str = "", default: str = "") -> str:
         try:
             raw = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            raise BackSignal()
+            raise BackSignal() from None
         return raw or default
 
     fd = sys.stdin.fileno()
@@ -705,7 +705,7 @@ def back_input(prompt: str = "", default: str = "") -> str:
     except BackSignal:
         raise
     except Exception:
-        raise BackSignal()
+        raise BackSignal() from None
     finally:
         with contextlib.suppress(Exception):
             termios.tcsetattr(fd, termios.TCSADRAIN, old)

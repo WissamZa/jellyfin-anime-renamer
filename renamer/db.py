@@ -471,14 +471,12 @@ class AnimeDatabase:
         Confirmation requires matching both ``file_name`` **and**
         ``size_in_bytes``.
         """
-        if (
+        return (
             file_name
             and candidate.get("file_name") == file_name
             and size is not None
             and candidate.get("size_in_bytes") == size
-        ):
-            return True
-        return False
+        )
 
     # ── Search / Filter ─────────────────────────────────
 
