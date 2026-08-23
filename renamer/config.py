@@ -227,7 +227,7 @@ class Config:
     # ── Naming templates (rarely need changing) ──────────────
     name_template: str = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
     special_template: str = "{series} - S00E{episode:02d} - {title}{ext}"
-    season_folder_template: str = "Season {season:2d}"
+    season_folder_template: str = "Season {season:d}"
     specials_folder_name: str = "Specials"
 
     # ── File handling ────────────────────────────────────────
