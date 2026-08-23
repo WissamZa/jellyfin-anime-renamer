@@ -224,6 +224,12 @@ class Config:
     scan_recursive: bool = False  # Scan subfolders recursively
     scan_depth: int = 3  # Max recursion depth for scanning
 
+    # ── MKV tooling (mkvtoolnix) ─────────────────────────────
+    sub_language: str = "eng"  # SUB_LANGUAGE — default merged-subtitle language
+    sub_delay_ms: int = 0  # SUB_DELAY_MS — subtitle sync offset (+ later, − earlier)
+    sub_default_track: bool = True  # SUB_DEFAULT_TRACK — flag merged subs as default
+    keep_mkv_backup: bool = False  # KEEP_MKV_BACKUP — keep .bak when replacing MKVs
+
     # ── Naming templates (rarely need changing) ──────────────
     name_template: str = "{series} - S{season:02d}E{episode:02d} - {title}{ext}"
     special_template: str = "{series} - S00E{episode:02d} - {title}{ext}"
@@ -343,6 +349,11 @@ class Config:
             use_hash=_bool("USE_HASH", False),
             scan_recursive=_bool("SCAN_RECURSIVE", False),
             scan_depth=scan_depth,
+            # MKV tooling (mkvtoolnix)
+            sub_language=_str("SUB_LANGUAGE", "eng"),
+            sub_delay_ms=_int("SUB_DELAY_MS") or 0,
+            sub_default_track=_bool("SUB_DEFAULT_TRACK", True),
+            keep_mkv_backup=_bool("KEEP_MKV_BACKUP", False),
         )
         if subtitle_exts is not None:
             env_values["subtitle_extensions"] = subtitle_exts

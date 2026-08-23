@@ -68,13 +68,9 @@ PACKET_INTERVAL = 2.5
 FILE_FMASK = "79FAFFE900"
 FILE_AMASK = "F2FCF0C0"
 
-# Known registered AniDB client names to try as fallback
-# These are open-source clients that have been registered with AniDB
-_FALLBACK_CLIENTS = [
-    # Client name, minimum version
-    ("anidb3", 1),
-    ("adba", 1),
-]
+# Maximum AUTH attempts per connect() — repeated AUTH failures trigger a
+# 30-minute IP ban at AniDB, so never hammer the endpoint.
+_MAX_AUTH_ATTEMPTS = 3
 
 
 def _looks_like_hash(s: str) -> bool:
@@ -110,13 +106,16 @@ class AniDBClient:
         client_name: str = "jenameramer",
         client_ver: int = 1,
         api_key: str | None = None,
+        use_encryption: bool = True,
     ) -> None:
         self._username = username
         self._password = password
         self._client_name = client_name
         self._client_ver = client_ver
         self._api_key = api_key
+        self._use_encryption = use_encryption and bool(api_key)
         self._session: str = ""
+        self._aes_key: bytes | None = None
         self._socket: socket.socket | None = None
         self._burst_counter = 0
         self._last_send_time = 0.0
@@ -129,12 +128,12 @@ class AniDBClient:
         """
         Open a UDP socket and authenticate with AniDB.
 
-        Implements a multi-strategy approach for the 505 error:
+        Strategy (kept deliberately short — repeated AUTH failures earn a
+        30-minute IP ban at AniDB):
           1. PING the server to verify connectivity
-          2. Try AUTH with the configured client name
-          3. On 505, try incrementing client version
-          4. On 505, try known registered fallback client names
-          5. Give detailed error messages for the user
+          2. AUTH with the configured client name/version
+          3. On 503/505, retry a few times with incremented versions
+             (stale client version is the usual cause)
 
         Returns True if authentication succeeded, False otherwise.
         """
@@ -144,6 +143,7 @@ class AniDBClient:
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self._socket.settimeout(ANIDB_TIMEOUT)
+            self._burst_counter = 0
 
             # Step 0: PING the server to verify connectivity
             print("  AniDB: testing connectivity … ", end="", flush=True)
@@ -154,47 +154,32 @@ class AniDBClient:
                 return False
             print("OK")
 
-            # Step 1: Try AUTH with configured client name
+            # Step 1: Try AUTH with configured client name/version
             success = self._try_auth(self._client_name, self._client_ver)
             if success:
                 return True
 
-            # Step 2: On 505, try incrementing client version (stale version = 503/505)
-            if self._last_auth_code == 505 or self._last_auth_code == 503:
-                for ver_offset in range(2, 10):
-                    log.info("AniDB: retrying AUTH with client_ver=%d …", ver_offset)
-                    success = self._try_auth(self._client_name, ver_offset)
-                    if success:
-                        self._client_ver = ver_offset
-                        return True
-                    if self._last_auth_code == 500:
-                        # 500 = wrong password, no point retrying different versions
-                        break
-                    if self._last_auth_code != 505 and self._last_auth_code != 503:
-                        # Different error, stop retrying
-                        break
+            # Step 2: On 503/505, retry with incremented versions (capped —
+            # hammering AUTH triggers a 30-minute IP ban)
+            attempts = 1
+            while (
+                attempts < _MAX_AUTH_ATTEMPTS
+                and self._last_auth_code in (503, 505)
+            ):
+                self._client_ver += 1
+                attempts += 1
+                log.info("AniDB: retrying AUTH with client_ver=%d …", self._client_ver)
+                success = self._try_auth(self._client_name, self._client_ver)
+                if success:
+                    return True
 
-            # Step 3: Try known fallback client names
-            if self._last_auth_code == 505 or self._last_auth_code == 504:
-                for fallback_name, fallback_ver in _FALLBACK_CLIENTS:
-                    log.info(
-                        "AniDB: trying fallback client '%s' v%d …", fallback_name, fallback_ver
-                    )
-                    # Reset socket for new attempt
-                    if self._socket:
-                        self._socket.close()
-                    self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    self._socket.settimeout(ANIDB_TIMEOUT)
-                    self._burst_counter = 0
-
-                    success = self._try_auth(fallback_name, fallback_ver)
-                    if success:
-                        self._client_name = fallback_name
-                        self._client_ver = fallback_ver
-                        return True
-                    if self._last_auth_code == 500:
-                        # Wrong password — stop trying (it's the same regardless of client)
-                        break
+            if self._last_auth_code in (504, 505):
+                print(f"\n  AniDB rejected client '{self._client_name}' "
+                      f"(code {self._last_auth_code}).")
+                print("  Client names must be registered at AniDB before use — see")
+                print("  https://wiki.anidb.net/UDP_API_Definition#Client_Registering")
+                print("  Set ANIDB_CLIENT / ANIDB_CLIENT_VER in .env to a name you")
+                print("  registered, or use PROVIDER=tmdb/anilist/kitsu instead.")
 
             return False
 
@@ -241,9 +226,15 @@ class AniDBClient:
         self._last_auth_code = code
 
         if code == 200:
-            # 200 {session_key} AUTH ACCEPTED
-            self._session = data.split()[0] if data else ""
+            # 200 {session_key} LOGIN ACCEPTED
+            self._session = self._parse_session(reply)
             self._connected = True
+            if not self._session:
+                log.error("AniDB: AUTH accepted but no session key in reply")
+                self._connected = False
+                return False
+            if self._use_encryption:
+                self._setup_encryption()
             log.info(
                 "AniDB: authenticated as %s (client=%s v%d, session=%s)",
                 self._username,
@@ -254,9 +245,15 @@ class AniDBClient:
             return True
 
         if code == 201:
-            # 201 {session_key} AUTH ACCEPTED — NEW VERSION AVAILABLE
-            self._session = data.split()[0] if data else ""
+            # 201 {session_key} LOGIN ACCEPTED — NEW VERSION AVAILABLE
+            self._session = self._parse_session(reply)
             self._connected = True
+            if not self._session:
+                log.error("AniDB: AUTH accepted but no session key in reply")
+                self._connected = False
+                return False
+            if self._use_encryption:
+                self._setup_encryption()
             log.info(
                 "AniDB: authenticated (new version available, client=%s v%d)",
                 client_name,
@@ -277,7 +274,7 @@ class AniDBClient:
             log.error("AniDB: client not registered — will try fallback")
             print(f"\n  AniDB: Client '{client_name}' not registered at AniDB")
         elif code == 505:
-            log.error("AniDB: ACCESS DENIED (code 505) — trying fallback")
+            log.error("AniDB: ACCESS DENIED (code 505)")
             print(f"\n  AniDB: ACCESS DENIED (code 505) with client '{client_name}' v{client_ver}")
         else:
             log.error("AniDB: AUTH failed with code %d: %s", code, data)
@@ -299,6 +296,7 @@ class AniDBClient:
 
         self._connected = False
         self._session = ""
+        self._aes_key = None
 
     # ── File lookup ───────────────────────────────────────────
 
@@ -310,6 +308,10 @@ class AniDBClient:
         Also makes ANIME, EPISODE, and GROUP enrichment calls.
         """
         if not self._connected and not self.connect():
+            return None
+
+        if not self._session:
+            log.error("AniDB: no session — AUTH failed or session was lost")
             return None
 
         # FILE command
@@ -407,6 +409,9 @@ class AniDBClient:
 
     def _fetch_anime(self, aid: int) -> dict[str, str] | None:
         """Fetch anime metadata via ANIME command."""
+        if not self._session:
+            log.debug("AniDB: skipping ANIME — no session")
+            return None
         msg = f"ANIME aid={aid}&s={self._session}"
         reply = self._send_recv(msg)
         if reply is None:
@@ -430,6 +435,9 @@ class AniDBClient:
 
     def _fetch_episode(self, eid: int) -> dict[str, str] | None:
         """Fetch episode metadata via EPISODE command."""
+        if not self._session:
+            log.debug("AniDB: skipping EPISODE — no session")
+            return None
         msg = f"EPISODE eid={eid}&s={self._session}"
         reply = self._send_recv(msg)
         if reply is None:
@@ -455,6 +463,9 @@ class AniDBClient:
 
     def _fetch_group(self, gid: int) -> dict[str, str] | None:
         """Fetch group metadata via GROUP command."""
+        if not self._session:
+            log.debug("AniDB: skipping GROUP — no session")
+            return None
         msg = f"GROUP gid={gid}&s={self._session}"
         reply = self._send_recv(msg)
         if reply is None:
@@ -479,6 +490,7 @@ class AniDBClient:
         Send a UDP message to AniDB and return the response string.
 
         Implements throttling: burst of 5 packets, then 1 per 2.5s.
+        Payloads are AES-128-CBC encrypted once the session is encrypted.
         """
         if self._aborted:
             return None
@@ -490,15 +502,22 @@ class AniDBClient:
         self._throttle()
 
         try:
-            self._socket.sendto(message.encode("utf-8"), (ANIDB_HOST, ANIDB_PORT))
+            payload = message.encode("utf-8")
+            if self._aes_key is not None:
+                payload = self._encrypt_payload(payload)
+
+            self._socket.sendto(payload, (ANIDB_HOST, ANIDB_PORT))
             self._last_send_time = time.time()
             self._burst_counter += 1
 
             if not expect_reply:
                 return None
 
-            data, _ = self._socket.recvfrom(8192)
-            return data.decode("utf-8", errors="replace").strip()
+            data, _ = self._socket.recvfrom(16384)
+            raw = bytes(data)
+            if self._aes_key is not None:
+                raw = self._decrypt_payload(raw)
+            return raw.decode("utf-8", errors="replace").strip()
 
         except TimeoutError:
             log.warning("AniDB: UDP request timed out")
@@ -509,21 +528,39 @@ class AniDBClient:
 
     def _throttle(self) -> None:
         """Enforce AniDB rate limit: burst of 5, then 1 per 2.5s."""
+        now = time.time()
+        if now - self._last_send_time > PACKET_INTERVAL:
+            self._burst_counter = 0  # idle longer than the interval — window expired
         if self._burst_counter < BURST_SIZE:
             return
 
-        elapsed = time.time() - self._last_send_time
+        elapsed = now - self._last_send_time
         if elapsed < PACKET_INTERVAL:
             wait = PACKET_INTERVAL - elapsed + random.uniform(0, 0.3)
             log.debug("AniDB: throttling — waiting %.1fs", wait)
             time.sleep(wait)
 
     @staticmethod
+    def _parse_session(reply: str) -> str:
+        """
+        Extract the session key from a 200/201 AUTH reply.
+
+        Format: ``200 {session_key} LOGIN ACCEPTED`` — the session key is
+        the token immediately after the numeric code.  Note that
+        ``_parse_reply`` deliberately drops this token from its data field,
+        so callers must use this method for auth replies.
+        """
+        parts = reply.split(" ", 2)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    @staticmethod
     def _parse_reply(reply: str) -> tuple[int, str]:
         """
         Parse an AniDB reply into (code, data).
 
-        Format: ``CODE {optional_text} data_line``
+        Format: ``CODE LABEL data_line`` — e.g. ``220 FILE aid|eid|…``.
+        For 200/201 auth replies the second token is the *session key*,
+        which must be read via :meth:`_parse_session` instead.
         """
         parts = reply.split(" ", 2)
         if not parts:
@@ -536,10 +573,6 @@ class AniDBClient:
         # Strip the text label (e.g. "220 FILE" → data after "FILE ")
         if len(parts) > 2:
             data = parts[2]
-        elif len(parts) > 1:
-            # Some responses have the label as second token
-            # e.g. "200 {session} LOGIN ACCEPTED" — we want session
-            pass
         return (code, data)
 
     @staticmethod
@@ -602,10 +635,77 @@ class AniDBClient:
 
     # ── Encryption support ────────────────────────────────────
 
+    def _setup_encryption(self) -> bool:
+        """
+        Upgrade the freshly-authenticated session to AES-128 encryption.
+
+        Per the AniDB UDP API spec this is done *after* a successful
+        plaintext AUTH with an ENCRYPT command:
+
+          1. Send ``ENCRYPT user={username}&type=1`` (plaintext)
+          2. Reply: ``ENCRYPTED {salt}`` (4-char salt)
+          3. AES key = md5(api_key + salt)
+
+        On any failure the session stays plaintext and we log a warning —
+        an unusable encrypted session is worse than a working plain one.
+        """
+        if not self._api_key or self._aes_key is not None:
+            return self._aes_key is not None
+
+        try:
+            reply = self._send_recv(f"ENCRYPT user={self._username}&type=1")
+            if reply is None:
+                log.warning("AniDB: no response to ENCRYPT — staying plaintext")
+                return False
+
+            # Reply format: "ENCRYPTED {salt}" or "3xx ENCRYPTED {salt}"
+            parts = reply.split()
+            salt = ""
+            for i, token in enumerate(parts):
+                if token == "ENCRYPTED" and i + 1 < len(parts):
+                    salt = parts[i + 1]
+                    break
+            if not salt:
+                log.warning(
+                    "AniDB: unexpected ENCRYPT reply (%r) — staying plaintext",
+                    reply[:40],
+                )
+                return False
+
+            self._aes_key = self._derive_aes_key(salt)
+            log.info("AniDB: session encryption enabled (salt=%s)", salt)
+            return True
+        except Exception as exc:
+            log.warning("AniDB: encryption handshake failed (%s) — staying plaintext", exc)
+            self._aes_key = None
+            return False
+
     def _derive_aes_key(self, salt: str) -> bytes:
-        """Derive AES-128 key from API key + salt (AniDB spec)."""
+        """
+        Derive the AES-128 session key from the API key + salt (AniDB spec).
+
+        NOTE: the wiki formula is md5(key + salt); whether AniDB expects the
+        profile *API key* or the account *password* must be validated on a
+        live run — offline tests can only assert the derivation math.
+        """
         raw = (self._api_key or "") + salt
         return hashlib.md5(raw.encode("utf-8"), usedforsecurity=False).digest()
+
+    def _encrypt_payload(self, payload: bytes) -> bytes:
+        """AES-128-CBC encrypt a packet; AniDB pads with null bytes to 16 B."""
+        from Crypto.Cipher import AES  # pycryptodome
+
+        pad_len = (-len(payload)) % 16
+        padded = payload + b"\x00" * pad_len
+        cipher = AES.new(self._aes_key, AES.MODE_CBC, iv=b"\x00" * 16)
+        return cipher.encrypt(padded)
+
+    def _decrypt_payload(self, data: bytes) -> bytes:
+        """AES-128-CBC decrypt a received packet and strip null padding."""
+        from Crypto.Cipher import AES  # pycryptodome
+
+        cipher = AES.new(self._aes_key, AES.MODE_CBC, iv=b"\x00" * 16)
+        return cipher.decrypt(data).rstrip(b"\x00")
 
 
 class AniDBFetcher(EpisodeFetcher):
@@ -613,7 +713,8 @@ class AniDBFetcher(EpisodeFetcher):
     AniDB-based episode fetcher using ED2K hash file identification.
 
     This fetcher works differently from the others:
-    - Instead of searching by series name, it identifies each file by hash.
+    - Instead of searching by series name, it identifies each file by hash
+      (AniDB is a hash-only provider — no name-search factory exists).
     - It first computes ED2K hashes for all video files in the media directory.
     - Then queries AniDB for each hash to get anime + episode metadata.
     - Groups files by anime and builds an episode map.
@@ -652,6 +753,7 @@ class AniDBFetcher(EpisodeFetcher):
             client_name=self._cfg.anidb_client or "jenameramer",
             client_ver=self._cfg.anidb_client_ver or 1,
             api_key=self._cfg.anidb_api_key or None,
+            use_encryption=bool(self._cfg.anidb_api_key),
         )
         return self._client
 
@@ -755,60 +857,96 @@ class AniDBFetcher(EpisodeFetcher):
             log.info("AniDB: updating series name from %r to %r", cfg.series_name, series_title)
             cfg.series_name = series_title
 
-        # Build episode map
+        # Build episode map (regular episodes) and specials map (S-prefixed)
         mapping: dict[int, EpisodeInfo] = {}
+        self._last_specials: dict[int, EpisodeInfo] = {}
         for _, _, _, info in primary_files:
-            # Parse episode number from AniDB's episode_number field
-            ep_num = self._parse_episode_number(info.episode_number)
-            if ep_num is None:
+            kind, num = self._classify_epno(info.episode_number)
+            if num is None:
                 continue
 
-            title = info.episode_title_en or info.episode_title_romaji or f"Episode {ep_num}"
+            title = info.episode_title_en or info.episode_title_romaji or f"Episode {num}"
 
-            # For AniDB, we assign season=1 by default (AniDB doesn't
+            if kind == "special":
+                # AniDB "S1" → S00E01-style special entry
+                if num not in self._last_specials:
+                    self._last_specials[num] = EpisodeInfo(
+                        absolute=num,
+                        season=0,
+                        episode=num,
+                        title=title,
+                        is_special=True,
+                        source=self.name,
+                    )
+                continue
+
+            # For regular episodes we assign season=1 by default (AniDB doesn't
             # always have season info; cross-referencing with TMDB is better)
-            mapping[ep_num] = EpisodeInfo(
-                absolute=ep_num,
+            mapping[num] = EpisodeInfo(
+                absolute=num,
                 season=1,
-                episode=ep_num,
+                episode=num,
                 title=title,
                 source=self.name,
             )
 
-        log.info("AniDB: mapped %d episodes for '%s'", len(mapping), series_title)
+        log.info(
+            "AniDB: mapped %d episode(s) + %d special(s) for '%s'",
+            len(mapping),
+            len(self._last_specials),
+            series_title,
+        )
         return mapping
 
     def fetch_specials(self) -> dict[int, EpisodeInfo]:
-        """AniDB specials are identified by episode type 'S' or 'C'."""
-        return {}
+        """
+        Return specials collected during the last ``fetch()`` call.
+
+        AniDB marks specials with an 'S'-prefixed episode number; they are
+        classified out of the regular episode stream and returned here so
+        the renamer can file them under Specials (S00Exx).
+        """
+        return getattr(self, "_last_specials", {})
+
+    @staticmethod
+    def _classify_epno(epno: str) -> tuple[str, int | None]:
+        """
+        Classify an AniDB episode-number field.
+
+        AniDB episode numbers can be:
+          - Regular: "1", "2", "13"      → ("regular", n)
+          - Special: "S1", "S2"          → ("special", n)
+          - Credit: "C1", "C2"           → ("credit", n)
+          - Other prefixed: "E5", "P1"   → ("other", n)
+          - Unparsable                    → ("other", None)
+
+        Returns ``(kind, number)``.
+        """
+        import re
+
+        if not epno:
+            return ("other", None)
+        epno = epno.strip()
+        if epno.isdigit():
+            return ("regular", int(epno))
+        prefix = epno[0].upper()
+        digits = epno[1:]
+        if digits.isdigit():
+            kind = {"S": "special", "C": "credit"}.get(prefix, "other")
+            return (kind, int(digits))
+        # Fall back to extracting any embedded digit group (e.g. "ep10")
+        m = re.search(r"\d+", epno)
+        return (("other", int(m.group())) if m else ("other", None))
 
     @staticmethod
     def _parse_episode_number(epno: str) -> int | None:
         """
-        Parse AniDB episode number field.
-
-        AniDB episode numbers can be:
-          - Regular: "1", "2", "13"
-          - Special: "S1", "S2"
-          - Credit: "C1", "C2"
-
-        Returns the integer episode number, or None for non-regular episodes.
+        Parse AniDB episode number field for regular-episode streams:
+        returns the integer number for plain and unprefixed-fallback forms,
+        None for specials ("S1") and credits ("C1").
         """
-        if not epno:
-            return None
-        epno = epno.strip()
-        if epno.isdigit():
-            return int(epno)
-        # Special/credit episodes
-        if epno.upper().startswith("S"):
-            return None  # Special — handled separately
-        if epno.upper().startswith("C"):
-            return None  # Credit — skip
-        # Try extracting digits
-        import re
-
-        m = re.search(r"\d+", epno)
-        return int(m.group()) if m else None
+        kind, num = AniDBFetcher._classify_epno(epno)
+        return num if kind in ("regular", "other") else None
 
     def lookup_single_file(self, file_path: Path) -> AniDBFileInfo | None:
         """

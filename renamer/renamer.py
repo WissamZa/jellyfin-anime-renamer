@@ -531,16 +531,25 @@ class AnimeRenamer:
         elif cfg.provider == Provider.AniList and not cfg.anilist_id:
             log.info("Auto-searching AniList for %r …", name)
             try:
-                from renamer.providers.anilist import AniListFetcher
-
-                af = AniListFetcher()
-                aid = af.find_id(name)
-                if aid:
-                    cfg.anilist_id = aid
-                    romaji = af.find_romaji(name)
-                    if romaji:
-                        cfg.series_name = romaji
+                results = registry.search_multi(Provider.AniList, name, cfg, limit=10)
+                if not results:
+                    log.info("No AniList results for %r", name)
+                elif len(results) == 1:
+                    r = results[0]
+                    cfg.anilist_id = r["id"]
+                    cfg.series_name = r.get("romaji") or r.get("name") or name
                     log.info("Auto-found: %r (AniList ID %d)", cfg.series_name, cfg.anilist_id)
+                else:
+                    # Multiple results — reuse the provider-agnostic picker
+                    selected = self._pick_series_from_results(results, name)
+                    if selected:
+                        cfg.anilist_id = selected["id"]
+                        cfg.series_name = selected.get("romaji") or selected.get("name") or name
+                        log.info(
+                            "Selected: %r (AniList ID %d)",
+                            cfg.series_name,
+                            cfg.anilist_id,
+                        )
             except Exception as exc:
                 log.warning("AniList auto-search failed: %s", exc)
 

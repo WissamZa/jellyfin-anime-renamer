@@ -182,6 +182,28 @@ def _anilist_factory(cfg: Config) -> EpisodeFetcher:
     return AniListFetcher(cfg.anilist_id)
 
 
+def _anilist_search(name: str, cfg: Config) -> SeriesSearchResult | None:
+    from renamer.providers.anilist import AniListFetcher
+
+    results = AniListFetcher().search(name, limit=1)
+    if not results:
+        return None
+    m = results[0]
+    titles = m.get("title") or {}
+    return SeriesSearchResult(
+        provider=Provider.AniList.value,
+        series_id=m["id"],
+        series_name=titles.get("romaji") or titles.get("english") or "",
+        anilist_id=m["id"],
+    )
+
+
+def _anilist_multi_search(name: str, cfg: Config, limit: int = 10) -> list[dict]:
+    from renamer.providers.anilist import AniListFetcher
+
+    return AniListFetcher().to_search_dicts(AniListFetcher().search(name, limit=limit))
+
+
 def _kitsu_factory(cfg: Config) -> EpisodeFetcher:
     from renamer.providers.kitsu import KitsuFetcher
 
@@ -227,7 +249,12 @@ def get_registry() -> ProviderRegistry:
             _tmdb_search,
             _tmdb_multi_search,
         )
-        _global_registry.register(Provider.AniList, _anilist_factory)
+        _global_registry.register(
+            Provider.AniList,
+            _anilist_factory,
+            _anilist_search,
+            _anilist_multi_search,
+        )
         _global_registry.register(Provider.Kitsu, _kitsu_factory, _kitsu_search)
         _global_registry.register(Provider.AniDB, _anidb_factory)
     return _global_registry

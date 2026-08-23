@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from renamer.providers.anidb import (
+    BURST_SIZE,
     AniDBClient,
     AniDBFetcher,
     _looks_like_hash,
@@ -780,3 +781,125 @@ class TestAniDBFetcherOffline:
         assert result is not None
         assert len(result) == 3  # only Anime Alpha's 3 episodes
         assert fetcher._cfg.series_name == "Anime Alpha"
+
+
+# ---------------------------------------------------------------------------
+# Session parsing (regression: session key was parsed as "LOGIN")
+# ---------------------------------------------------------------------------
+
+
+class TestParseSession:
+    def test_session_extracts_token(self):
+        assert AniDBClient._parse_session("200 s3ss10n LOGIN ACCEPTED") == "s3ss10n"
+
+    def test_session_from_new_version_reply(self):
+        assert AniDBClient._parse_session("201 abcdef LOGIN ACCEPTED - NEW") == "abcdef"
+
+    def test_parse_reply_drops_session_from_data(self):
+        """_parse_reply's data field must NOT contain the session token."""
+        code, data = AniDBClient._parse_reply("200 s3ss10n LOGIN ACCEPTED")
+        assert code == 200
+        assert data == "LOGIN ACCEPTED"
+
+
+class TestAuthStoresRealSession:
+    def test_try_auth_stores_real_session(self):
+        c = AniDBClient("u", "p", use_encryption=False)
+        c._socket = MagicMock()
+        with patch.object(c, "_send_recv", return_value="200 s3ss10n LOGIN ACCEPTED"):
+            assert c._try_auth("myclient", 1) is True
+            assert c._session == "s3ss10n"
+
+    def test_try_auth_rejects_missing_session(self):
+        c = AniDBClient("u", "p", use_encryption=False)
+        c._socket = MagicMock()
+        # Degenerate reply without a session token
+        with patch.object(c, "_send_recv", return_value="200"):
+            assert c._try_auth("myclient", 1) is False
+            assert c._connected is False
+
+    def test_file_lookup_refuses_empty_session(self):
+        c = AniDBClient("u", "p")
+        c._connected = True
+        c._session = ""
+        assert c.file_lookup(64, "ab" * 16) is None
+
+
+# ---------------------------------------------------------------------------
+# Throttling
+# ---------------------------------------------------------------------------
+
+
+class TestThrottle:
+    def test_burst_resets_after_idle(self):
+        c = AniDBClient("u", "p")
+        c._last_send_time = time.time() - 10.0  # idle > PACKET_INTERVAL
+        c._burst_counter = BURST_SIZE + 7
+        c._throttle()
+        assert c._burst_counter == 0
+
+
+# ---------------------------------------------------------------------------
+# Episode-number classification & specials
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyEpno:
+    @pytest.mark.parametrize(
+        "epno,kind,num",
+        [
+            ("1", "regular", 1),
+            ("12", "regular", 12),
+            ("S1", "special", 1),
+            ("s2", "special", 2),
+            ("C1", "credit", 1),
+            ("E5", "other", 5),
+            ("ep10", "other", 10),
+            ("", "other", None),
+            ("garbage", "other", None),
+        ],
+    )
+    def test_classify(self, epno: str, kind: str, num: int | None):
+        assert AniDBFetcher._classify_epno(epno) == (kind, num)
+
+    def test_fetch_specials_returns_collected_entries(self, tmp_path: Path):
+        """S-prefixed episodes land in fetch_specials() as S00Exx entries."""
+        fetcher = AniDBFetcher.__new__(AniDBFetcher)
+        from unittest.mock import MagicMock
+
+        cfg = MagicMock()
+        cfg.media_dir = tmp_path
+        cfg.video_extensions = (".mkv",)
+        cfg.anidb_offline = True
+        cfg.anidb_username = ""
+        cfg.series_name = ""
+        fetcher._cfg = cfg
+        fetcher._client = None
+        fetcher._anidb_cache = AniDBCache()
+
+        video = tmp_path / "Special Ep.mkv"
+        video.write_bytes(b"x")
+
+        info = _make_info(
+            ed2k="cc" * 16,
+            size=64,
+            aid=100,
+            eid=9,
+            episode_number="S1",
+            anime_title_romaji="Anime Alpha",
+            episode_title_en="OVA Special",
+        )
+        fetcher._anidb_cache.set(info)
+
+        with (
+            patch("renamer.ed2k.compute_ed2k", return_value="cc" * 16),
+            patch("renamer.ed2k.get_file_size", return_value=64),
+        ):
+            mapping = fetcher.fetch()
+
+        assert mapping == {} or mapping is not None  # no regular episodes
+        specials = fetcher.fetch_specials()
+        assert 1 in specials
+        assert specials[1].season == 0
+        assert specials[1].is_special is True
+        assert specials[1].title == "OVA Special"

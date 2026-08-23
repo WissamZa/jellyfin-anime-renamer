@@ -88,6 +88,7 @@ def _main_menu_options() -> list[tuple[str, str]]:
         ("[Run] Dry Run  (preview only)", "dry_run"),
         ("[Run] Live Rename + Organise", "live_run"),
         ("[Subtitles] Rename subtitles to match videos  -->", "rename_subtitles"),
+        ("[Subtitles] Merge subtitles into MKV (mkvtoolnix)  -->", "merge_subtitles"),
         ("[Organize] Hash-scan & organize mixed anime files  -->", "hash_organize"),
         ("[Scan] Scan folder — pick & rename multiple series  -->", "multi_series"),
         ("[Folders] Rename folder names using TMDB  -->", "rename_folders"),
@@ -127,6 +128,7 @@ def _utilities_menu_options() -> list[tuple[str, str]]:
         ("Set folder icon for current series", "set_icon"),
         ("Set folder icons for ALL series (batch)", "batch_set_icons"),
         ("Remove folder icons (batch)", "batch_remove_icons"),
+        ("Strip cover images from MKV files (batch)", "strip_covers"),
         ("<-- Back to main menu", "back"),
     ]
 
@@ -158,6 +160,13 @@ def build_config_from_args(args: argparse.Namespace) -> Config:
         overrides["anidb_offline"] = True
     if args.media_dir is not None:
         overrides["media_dir"] = Path(args.media_dir)
+    # ── MKV tooling ───────────────────────────────────────────
+    if getattr(args, "sub_lang", None) is not None:
+        overrides["sub_language"] = args.sub_lang
+    if getattr(args, "sub_delay", None) is not None:
+        overrides["sub_delay_ms"] = args.sub_delay
+    if getattr(args, "keep_backup", False):
+        overrides["keep_mkv_backup"] = True
 
     # Use Config.from_env so it loads all keys and values from .env
     # and merges them with overrides.
@@ -464,6 +473,307 @@ def run_subtitle_rename_menu(cfg: Config) -> None:
         print("  Subtitles renamed successfully.")
 
 
+def _pick_subtitle_language(cfg: Config) -> str:
+    """Show a picker of common subtitle languages plus a custom-code option."""
+    from renamer.picker import Picker
+
+    common = [
+        ("English", "eng"),
+        ("Japanese", "jpn"),
+        ("Arabic", "ara"),
+        ("French", "fre"),
+        ("German", "ger"),
+        ("Spanish", "spa"),
+        ("Italian", "ita"),
+        ("Portuguese (Brazil)", "por"),
+        ("Russian", "rus"),
+        ("Undetermined", "und"),
+    ]
+    options = [(f"{label}  [{code}]", code) for label, code in common]
+    options.append(("Enter a custom language code", "custom"))
+
+    result = Picker(
+        options,
+        title=f"SUBTITLE LANGUAGE (default: {cfg.sub_language})",
+        default_index=0,
+    ).run()
+    if result is None:
+        return cfg.sub_language
+    if result[1] == "custom":
+        code = input("  Language code (e.g. eng, ara, pt-BR): ").strip().lower()
+        return code or cfg.sub_language
+    return result[1]
+
+
+def run_subtitle_merge_menu(cfg: Config) -> None:
+    """
+    Interactive subtitle-merge flow using mkvtoolnix.
+
+    Pairs subtitle files with videos (same matching as the subtitle
+    renamer), then muxes each subtitle track into its MKV in place with
+    an optional timing offset and language tag.
+    """
+    from renamer.mkvtools import ensure_mkvtoolnix, merge_subtitle
+    from renamer.subtitle_matcher import scan_subtitle_matches
+
+    if not ensure_mkvtoolnix("mkvmerge"):
+        print("\n  mkvmerge is required for subtitle merging.")
+        return
+
+    # Ask which directory to scan
+    options = [
+        (f"Use current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
+        ("Use current working directory (where you ran the command)", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("<-- Back to main menu", "back"),
+    ]
+    result = Picker(
+        options,
+        title="SUBTITLE MERGE: SELECT DIRECTORY",
+        default_index=0,
+    ).run()
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    target_dir: Path | None = None
+    if choice == "media_dir":
+        target_dir = cfg.media_dir
+    elif choice == "cwd":
+        target_dir = Path.cwd()
+        print(f"\n  Current directory: {target_dir}")
+        if input("  Confirm this directory? (Y/n): ").strip().lower() in ("n", "no"):
+            print("  Cancelled.")
+            return
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if not custom:
+            print("  Cancelled.")
+            return
+        target_dir = Path(custom).resolve()
+        if not target_dir.is_dir():
+            print(f"  Directory does not exist: {target_dir}")
+            return
+
+    if target_dir is None:
+        return
+
+    # Scan depth
+    scan_recursive = False
+    sub_count_shallow = sum(
+        1
+        for f in target_dir.iterdir()
+        if f.is_file() and f.suffix.lower() in cfg.subtitle_extensions
+    )
+    sub_count_deep = sum(
+        1
+        for f in target_dir.rglob("*")
+        if f.is_file() and f.suffix.lower() in cfg.subtitle_extensions
+    )
+    if sub_count_deep > sub_count_shallow:
+        rec_choice = Picker(
+            [
+                ("Scan current folder only", False),
+                (f"Scan recursively (all subfolders) — {sub_count_deep} subtitle(s)", True),
+            ],
+            title="SCAN DEPTH",
+            default_index=0,
+        ).run()
+        if rec_choice:
+            scan_recursive = rec_choice[1]
+
+    # Pair subtitles with videos
+    scan_result = scan_subtitle_matches(
+        media_dir=target_dir,
+        video_extensions=cfg.video_extensions,
+        subtitle_extensions=cfg.subtitle_extensions,
+        scan_recursive=scan_recursive,
+    )
+    mkv_pairs = [m for m in scan_result.matches if m.video_path.suffix.lower() == ".mkv"]
+    if not mkv_pairs:
+        print("\n  No video+subtitle pairs found. Nothing to merge.")
+        return
+
+    # Language
+    language = _pick_subtitle_language(cfg)
+
+    # Timing: one offset per batch, or per-file prompt
+    delay_choice = Picker(
+        [
+            ("No timing adjustment", 0),
+            ("One delay for all files (enter ms)", "batch"),
+            ("Ask per file", "per_file"),
+        ],
+        title="TIMING FIX (SYNC OFFSET)",
+        default_index=0,
+    ).run()
+    delay_ms = 0
+    per_file_delay = False
+    if delay_choice:
+        if delay_choice[1] == "batch":
+            raw = input("  Delay in ms (positive = subtitles later, negative = earlier): ").strip()
+            try:
+                delay_ms = int(raw)
+            except ValueError:
+                print("  Not a number — no offset applied.")
+        elif delay_choice[1] == "per_file":
+            per_file_delay = True
+
+    # Videos that already contain a subtitle track in the chosen language
+    force = False
+    dup_result = Picker(
+        [
+            ("Skip files that already have a subtitle in that language", "skip"),
+            ("Merge anyway (adds a second track with the same language)", "force"),
+        ],
+        title="FILES THAT ALREADY HAVE SUBTITLES",
+        default_index=0,
+    ).run()
+    if dup_result and dup_result[1] == "force":
+        force = True
+
+    # Preview
+    print(f"\n  {len(mkv_pairs)} subtitle(s) will be merged into MKV videos:")
+    for m in mkv_pairs:
+        print(f"    {m.video_path.name}  ←  {m.subtitle_path.name}")
+
+    mode_result = Picker(
+        [
+            ("Dry Run  (show commands only)", "dry"),
+            ("Live Merge  (rewrite videos in place)", "live"),
+            ("Back to main menu", "back"),
+        ],
+        title="SUBTITLE MERGE: EXECUTION MODE",
+        default_index=0,
+    ).run()
+    if mode_result is None or mode_result[1] == "back":
+        return
+    dry_run = mode_result[1] == "dry"
+
+    if not dry_run:
+        print(f"\n  WARNING: {len(mkv_pairs)} video file(s) will be rewritten in place.")
+        if input("  Continue? (y/N): ").strip().lower() != "y":
+            print("  Cancelled.")
+            return
+
+    # Execute
+    ok_count = 0
+    for m in mkv_pairs:
+        delay = delay_ms
+        if per_file_delay and not dry_run:
+            raw = input(f"  Delay ms for {m.video_path.name} [{delay_ms}]: ").strip()
+            if raw:
+                try:
+                    delay = int(raw)
+                except ValueError:
+                    delay = delay_ms
+
+        res = merge_subtitle(
+            m.video_path,
+            m.subtitle_path,
+            language=language,
+            delay_ms=delay,
+            default_track=cfg.sub_default_track,
+            keep_backup=cfg.keep_mkv_backup,
+            dry_run=dry_run,
+            force=force,
+        )
+        if res.ok:
+            ok_count += 1
+            print(f"    ✓ {m.video_path.name}  ←  {m.subtitle_path.name}")
+        elif "skipped" in res.error:
+            print(f"    ⏭ {m.video_path.name}: {res.error}")
+        else:
+            print(f"    ✗ {m.video_path.name}: {res.error}")
+
+    mode_label = "DRY RUN" if dry_run else "LIVE"
+    print(f"\n  {mode_label}: {ok_count}/{len(mkv_pairs)} merge(s) completed.")
+
+
+def run_strip_covers_menu(cfg: Config) -> None:
+    """Interactive cover-image removal from MKV files using mkvpropedit."""
+    from renamer.mkvtools import ensure_mkvtoolnix, strip_covers
+
+    if not ensure_mkvtoolnix("mkvpropedit"):
+        print("\n  mkvpropedit is required for cover removal.")
+        return
+
+    options = [
+        (f"Use current MEDIA_DIR: {cfg.media_dir}", "media_dir"),
+        ("Use current working directory (where you ran the command)", "cwd"),
+        ("Enter a custom path", "custom"),
+        ("<-- Back to main menu", "back"),
+    ]
+    result = Picker(
+        options,
+        title="STRIP COVERS: SELECT DIRECTORY",
+        default_index=0,
+    ).run()
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    target_dir: Path | None = None
+    if choice == "media_dir":
+        target_dir = cfg.media_dir
+    elif choice == "cwd":
+        target_dir = Path.cwd()
+        print(f"\n  Current directory: {target_dir}")
+        if input("  Confirm this directory? (Y/n): ").strip().lower() in ("n", "no"):
+            print("  Cancelled.")
+            return
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if not custom:
+            print("  Cancelled.")
+            return
+        target_dir = Path(custom).resolve()
+        if not target_dir.is_dir():
+            print(f"  Directory does not exist: {target_dir}")
+            return
+
+    if target_dir is None:
+        return
+
+    recursive = False
+    mkv_shallow = list(target_dir.glob("*.mkv"))
+    mkv_deep = list(target_dir.glob("**/*.mkv"))
+    if len(mkv_deep) > len(mkv_shallow):
+        rec_choice = Picker(
+            [
+                ("Current folder only", False),
+                (f"Recursively (all subfolders) — {len(mkv_deep)} MKV(s)", True),
+            ],
+            title="SCAN DEPTH",
+            default_index=0,
+        ).run()
+        if rec_choice:
+            recursive = rec_choice[1]
+
+    # Dry-run preview first
+    print(f"\n  Scanning for MKV files in: {target_dir}")
+    preview = strip_covers(target_dir, recursive=recursive, dry_run=True)
+    if not preview:
+        print("  No MKV files found. Nothing to do.")
+        return
+
+    print(f"  Found {len(preview)} MKV file(s). Cover attachments will be deleted from:")
+    for r in preview:
+        print(f"    {r.video}")
+
+    if input("\n  Proceed? (y/N): ").strip().lower() != "y":
+        print("  Cancelled.")
+        return
+
+    results = strip_covers(target_dir, recursive=recursive)
+    ok_count = sum(1 for r in results if r.ok)
+    for r in results:
+        mark = "✓" if r.ok else "✗"
+        detail = "" if r.ok else f": {r.error}"
+        print(f"    {mark} {r.video.name}{detail}")
+    print(f"\n  {ok_count}/{len(results)} file(s) processed.")
+
+
 def run_identity_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
     """Run the provider and series identity settings sub-menu."""
     while True:
@@ -530,6 +840,8 @@ def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             menus.batch_set_icons(cfg)
         elif action == "batch_remove_icons":
             menus.batch_remove_icons(cfg)
+        elif action == "strip_covers":
+            run_strip_covers_menu(cfg)
 
 
 def _goodbye_handler(signum, frame) -> None:
@@ -722,6 +1034,38 @@ def main() -> None:
         "--media-dir",
         help="Override MEDIA_DIR path for this run",
     )
+    # ── MKV tooling (mkvtoolnix) ──────────────────────────────
+    parser.add_argument(
+        "--merge-subs",
+        action="store_true",
+        help="Merge matching subtitle files into MKV videos (requires mkvtoolnix)",
+    )
+    parser.add_argument(
+        "--sub-lang",
+        help="Default language code for merged subtitles (e.g. eng, ara)",
+    )
+    parser.add_argument(
+        "--sub-delay",
+        type=int,
+        metavar="MS",
+        help="Subtitle sync offset in ms for merging (positive = later, negative = earlier)",
+    )
+    parser.add_argument(
+        "--strip-covers",
+        action="store_true",
+        help="Remove cover-image attachments from all MKV files in MEDIA_DIR",
+    )
+    parser.add_argument(
+        "--keep-backup",
+        action="store_true",
+        help="Keep a .bak copy of the original video when merging subtitles",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --merge-subs: also merge when the video already has a "
+             "subtitle track in the target language",
+    )
     parser.add_argument(
         "--current-dir",
         action="store_true",
@@ -777,6 +1121,61 @@ def main() -> None:
         organizer.execute(dry_run=not args.live)
         return
 
+    # Non-interactive: strip cover images from MKV files
+    if getattr(args, "strip_covers", False):
+        print(BANNER)
+        from renamer.mkvtools import ensure_mkvtoolnix, strip_covers
+
+        if not ensure_mkvtoolnix("mkvpropedit"):
+            print("\n  mkvpropedit is required for cover removal.")
+            return
+        results = strip_covers(
+            cfg.media_dir,
+            recursive=args.recursive,
+            dry_run=args.dry_run,
+        )
+        ok_count = sum(1 for r in results if r.ok)
+        label = "DRY RUN" if args.dry_run else "LIVE"
+        print(f"\n  {label}: {ok_count}/{len(results)} MKV file(s) processed.")
+        return
+
+    # Non-interactive: merge subtitles into MKV videos
+    if getattr(args, "merge_subs", False):
+        print(BANNER)
+        from renamer.mkvtools import ensure_mkvtoolnix, merge_subtitles_batch
+        from renamer.subtitle_matcher import scan_subtitle_matches
+
+        if not ensure_mkvtoolnix("mkvmerge"):
+            print("\n  mkvmerge is required for subtitle merging.")
+            return
+        scan_result = scan_subtitle_matches(
+            media_dir=cfg.media_dir,
+            video_extensions=cfg.video_extensions,
+            subtitle_extensions=cfg.subtitle_extensions,
+            scan_recursive=args.recursive,
+        )
+        pairs = [
+            (m.video_path, m.subtitle_path, m.language_tag)
+            for m in scan_result.matches
+            if m.video_path.suffix.lower() == ".mkv"
+        ]
+        if not pairs:
+            print("\n  No video+subtitle pairs found. Nothing to merge.")
+            return
+        results = merge_subtitles_batch(
+            pairs,
+            language=cfg.sub_language,
+            delay_ms=cfg.sub_delay_ms,
+            default_track=cfg.sub_default_track,
+            keep_backup=cfg.keep_mkv_backup,
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+        ok_count = sum(1 for r in results if r.ok)
+        label = "DRY RUN" if args.dry_run else "LIVE"
+        print(f"\n  {label}: {ok_count}/{len(results)} merge(s) completed.")
+        return
+
     # Non-interactive mode
     if args.dry_run:
         print(BANNER)
@@ -824,6 +1223,8 @@ def main() -> None:
                 print("  Cancelled.")
         elif choice == "rename_subtitles":
             run_subtitle_rename_menu(cfg)
+        elif choice == "merge_subtitles":
+            run_subtitle_merge_menu(cfg)
         elif choice == "hash_organize":
             run_hash_organize_menu(cfg)
         elif choice == "multi_series":
