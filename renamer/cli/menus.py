@@ -1938,6 +1938,190 @@ def _make_series_config_for_icon(
 
 
 # ---------------------------------------------------------------------------
+# tvshow.nfo Metadata Generator Menus
+# ---------------------------------------------------------------------------
+
+
+def create_nfo_current_folder(cfg: Config, overwrite: bool = True) -> bool:
+    """Generate tvshow.nfo for the current series folder using TMDB with Romaji title."""
+    from renamer.nfo import NfoGenerator
+
+    folder = cfg.media_dir
+    print(f"\n  Generating tvshow.nfo for: {folder}")
+    if not folder.is_dir():
+        print(f"  Folder does not exist: {folder}")
+        return False
+
+    gen = NfoGenerator(cfg)
+    result = gen.process_folder(
+        folder,
+        tmdb_id=cfg.tmdb_series_id,
+        preferred_title=cfg.series_name,
+        anilist_id=cfg.anilist_id,
+        overwrite=overwrite,
+    )
+    if result:
+        print(f"  Successfully created: {result}")
+        return True
+    print("  Failed to create tvshow.nfo (could not find series on TMDB).")
+    return False
+
+
+def batch_create_nfo(
+    cfg: Config,
+    target_dir: Path | None = None,
+    preselect_all: bool = True,
+    overwrite: bool = True,
+) -> None:
+    """
+    Generate tvshow.nfo files for anime series subfolders under target_dir (or cfg.media_dir).
+    """
+    from renamer.cli.multi_series import (
+        DiscoveredSeries,
+        LibraryDBCache,
+        auto_identify_series,
+        scan_series_folders,
+    )
+    from renamer.nfo import NfoGenerator
+    from renamer.picker import MultiPicker
+
+    media_dir = target_dir or cfg.media_dir
+    print(f"\n  Scanning for series folders in: {media_dir}")
+
+    folders = scan_series_folders(media_dir, cfg=cfg)
+    if not folders:
+        # Also check if media_dir itself is an anime folder directly
+        video_exts = set(cfg.video_extensions)
+        if any(f.suffix.lower() in video_exts for f in media_dir.iterdir() if f.is_file()):
+            folders = [media_dir]
+        else:
+            print("  No anime series folders found.")
+            return
+
+    print(f"  Found {len(folders)} folder(s). Auto-identifying titles …\n")
+
+    db_cache = LibraryDBCache(media_dir)
+    discovered: list[DiscoveredSeries] = []
+
+    for i, folder in enumerate(folders, 1):
+        print(f"  [{i}/{len(folders)}] {folder.name} … ", end="", flush=True)
+        try:
+            series = auto_identify_series(folder, cfg, db_cache)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Error identifying '%s': %s", folder.name, exc)
+            series = DiscoveredSeries(
+                folder=folder,
+                folder_name=folder.name,
+                resolved_name=folder.name,
+                provider=cfg.provider,
+            )
+        discovered.append(series)
+
+        has_nfo = (folder / "tvshow.nfo").is_file()
+        nfo_tag = " [nfo exists]" if has_nfo else ""
+        id_tag = f"  [TMDB:{series.tmdb_id}]" if series.tmdb_id else "  [ID unknown]"
+        print(f"-> {series.resolved_name}{id_tag}{nfo_tag}")
+
+    print()
+
+    options: list[tuple[str, DiscoveredSeries]] = []
+    for s in discovered:
+        has_nfo = (s.folder / "tvshow.nfo").is_file()
+        tag = "  [nfo exists]" if has_nfo else ""
+        id_tag = f"  TMDB:{s.tmdb_id}" if s.tmdb_id else ""
+        label = f"{s.resolved_name}{id_tag}{tag}  [{s.folder.name}]"
+        options.append((label, s))
+
+    preselected = (
+        list(range(len(options)))
+        if preselect_all
+        else [i for i, s in enumerate(discovered) if not (s.folder / "tvshow.nfo").is_file()]
+    )
+
+    choices = MultiPicker(
+        options,
+        title="SELECT FOLDERS TO GENERATE TVSHOW.NFO",
+        preselected=preselected,
+    ).run()
+
+    if choices is None:
+        print("  Cancelled.")
+        return
+
+    if not choices:
+        print("  No folders selected.")
+        return
+
+    selected = [s for _, s in choices]
+    print(f"\n  Generating tvshow.nfo for {len(selected)} folder(s) …\n")
+
+    gen = NfoGenerator(cfg)
+    success, failure = 0, 0
+    for i, series in enumerate(selected, 1):
+        print(f"  [{i}/{len(selected)}] {series.resolved_name} … ", end="", flush=True)
+        try:
+            result = gen.process_folder(
+                folder=series.folder,
+                tmdb_id=series.tmdb_id,
+                preferred_title=series.resolved_name,
+                anilist_id=series.anilist_id,
+                overwrite=overwrite,
+            )
+            if result:
+                print("OK")
+                success += 1
+            else:
+                print("failed")
+                failure += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"FAILED: {exc}")
+            log.error("NFO generation failed for '%s': %s", series.resolved_name, exc)
+            failure += 1
+
+    print(f"\n  tvshow.nfo files generated: {success}  |  Failed: {failure}")
+
+
+def run_nfo_menu(cfg: Config) -> None:
+    """Interactive NFO generation menu."""
+    from renamer.picker import Picker
+
+    options = [
+        ("Create tvshow.nfo for current series folder", "current"),
+        ("Select folders to create tvshow.nfo (batch)", "batch_select"),
+        ("Create tvshow.nfo for ALL series folders (batch)", "batch_all"),
+        ("Choose a custom directory to scan", "custom"),
+        ("<-- Back to main menu", "back"),
+    ]
+
+    result = Picker(
+        options,
+        title="NFO GENERATOR: TVSHOW.NFO METADATA",
+        default_index=0,
+    ).run()
+
+    if result is None or result[1] == "back":
+        return
+
+    choice = result[1]
+    if choice == "current":
+        create_nfo_current_folder(cfg)
+    elif choice == "batch_select":
+        batch_create_nfo(cfg, preselect_all=False)
+    elif choice == "batch_all":
+        batch_create_nfo(cfg, preselect_all=True)
+    elif choice == "custom":
+        custom = input("  Enter directory path: ").strip()
+        if not custom:
+            print("  Cancelled.")
+            return
+        target = Path(custom).resolve()
+        if not target.is_dir():
+            print(f"  Directory does not exist: {target}")
+            return
+        batch_create_nfo(cfg, target_dir=target)
+
+
+# ---------------------------------------------------------------------------
 # Backup Database Menu
 # ---------------------------------------------------------------------------
 

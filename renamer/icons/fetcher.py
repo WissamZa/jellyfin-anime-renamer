@@ -128,10 +128,17 @@ def fetch_anilist_poster(cfg: Config) -> PosterResult | None:
         return None
 
     try:
+        from renamer.providers.anilist import AniListFetcher
+
+        headers = dict(AniListFetcher.DEFAULT_HEADERS)
+        if getattr(cfg, "anilist_token", ""):
+            headers["Authorization"] = f"Bearer {cfg.anilist_token}"
+
         r = _requests.post(
             "https://graphql.anilist.co",
             json={"query": _ANILIST_POSTER_QUERY, "variables": variables},
             timeout=15,
+            headers=headers,
         )
         if r.status_code != 200:
             log.warning("AniList poster: HTTP %s", r.status_code)

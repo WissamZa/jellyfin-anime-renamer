@@ -204,6 +204,7 @@ class Config:
     series_name: str = ""
     tmdb_series_id: int | None = None
     anilist_id: int | None = None
+    anilist_token: str = ""
     kitsu_id: int | None = None
     episode_group_id: str | None = None
 
@@ -323,6 +324,7 @@ class Config:
             series_name=_str("SERIES_NAME"),
             tmdb_series_id=_int("TMDB_SERIES_ID"),
             anilist_id=_int("ANILIST_ID"),
+            anilist_token=_str("ANILIST_TOKEN"),
             kitsu_id=_int("KITSU_ID"),
             episode_group_id=_str("EPISODE_GROUP_ID") or None,
             media_dir=Path(_str("MEDIA_DIR") or "."),

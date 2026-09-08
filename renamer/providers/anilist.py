@@ -7,8 +7,10 @@ construction — cross-season shows are separate Media entries (resolve a
 different AniList ID per season).
 """
 
+import os
 import re
 import time
+from typing import ClassVar
 
 import requests
 
@@ -27,6 +29,17 @@ class AniListFetcher(EpisodeFetcher):
 
     name = "AniList"
     URL = "https://graphql.anilist.co"
+
+    DEFAULT_HEADERS: ClassVar[dict[str, str]] = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Origin": "https://anilist.co",
+        "Referer": "https://anilist.co/",
+        "Accept": "application/json",
+    }
 
     SERIES_QUERY = """
     query ($id: Int, $search: String) {
@@ -78,9 +91,10 @@ class AniListFetcher(EpisodeFetcher):
     }
     """
 
-    def __init__(self, anime_id: int | None = None):
+    def __init__(self, anime_id: int | None = None, token: str | None = None):
         super().__init__()
         self._id = anime_id
+        self._token = token or os.getenv("ANILIST_TOKEN", "")
 
     def _gql(self, query: str, variables: dict) -> dict | None:
         # AniList uses POST, so cache by query + variables
@@ -92,27 +106,42 @@ class AniListFetcher(EpisodeFetcher):
         result: dict | None = None
         session = _get_shared_session()
         attempts = 3
+        headers = dict(self.DEFAULT_HEADERS)
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+
         for attempt in range(1, attempts + 1):
             try:
                 r = session.post(
                     self.URL,
                     json={"query": query, "variables": variables},
                     timeout=15,
-                    headers={"Accept": "application/json"},
+                    headers=headers,
                 )
                 if r.status_code == 200:
                     payload = r.json()
                     for err in payload.get("errors") or []:
                         log.warning("AniList GraphQL error: %s", err.get("message"))
                     data = payload.get("data")
-                    result = data.get("Media") if isinstance(data, dict) else None
+                    if isinstance(data, dict):
+                        result = data.get("Media") or data.get("Page")
                     break
                 if r.status_code == 429:
                     wait = int(r.headers.get("Retry-After", 2 * attempt))
                     log.warning("AniList rate-limited — retrying in %ss …", wait)
                     time.sleep(wait)
                     continue
-                log.warning("AniList HTTP %s", r.status_code)
+                err_msg = ""
+                try:
+                    payload = r.json()
+                    err_list = payload.get("errors") or []
+                    if err_list:
+                        err_msg = ": " + "; ".join(
+                            e.get("message", "") for e in err_list if e.get("message")
+                        )
+                except Exception:
+                    pass
+                log.warning("AniList HTTP %s%s", r.status_code, err_msg)
                 break  # non-transient client errors won't recover on retry
             except requests.exceptions.RequestException as e:
                 log.error("AniList request failed: %s", e)

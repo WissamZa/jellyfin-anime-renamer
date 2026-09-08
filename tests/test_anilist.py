@@ -99,10 +99,67 @@ class TestGql:
 
     def test_http_error_returns_none(self):
         resp = MagicMock(status_code=500)
+        resp.json.return_value = {}
         with patch("renamer.providers.anilist._get_shared_session") as sess:
             sess.return_value.post.return_value = resp
             f = AniListFetcher()
             assert f._gql(f.SERIES_QUERY, {"search": "x"}) is None
+
+    def test_default_headers_sent(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"data": {"Media": {"id": 1}}}
+        with patch("renamer.providers.anilist._get_shared_session") as sess:
+            sess.return_value.post.return_value = resp
+            f = AniListFetcher()
+            f._gql(f.SERIES_QUERY, {"id": 1})
+            call_kwargs = sess.return_value.post.call_args[1]
+            headers = call_kwargs["headers"]
+            assert headers["Origin"] == "https://anilist.co"
+            assert headers["Referer"] == "https://anilist.co/"
+            assert "User-Agent" in headers
+            assert headers["Accept"] == "application/json"
+
+    def test_token_header_sent(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"data": {"Media": {"id": 1}}}
+        with patch("renamer.providers.anilist._get_shared_session") as sess:
+            sess.return_value.post.return_value = resp
+            f = AniListFetcher(token="secret_token_123")
+            f._gql(f.SERIES_QUERY, {"id": 1})
+            call_kwargs = sess.return_value.post.call_args[1]
+            assert call_kwargs["headers"]["Authorization"] == "Bearer secret_token_123"
+
+    def test_page_query_result_returned(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"data": {"Page": {"media": [{"id": 123}]}}}
+        with patch("renamer.providers.anilist._get_shared_session") as sess:
+            sess.return_value.post.return_value = resp
+            f = AniListFetcher()
+            result = f._gql(f.SEARCH_QUERY, {"search": "test"})
+            assert result == {"media": [{"id": 123}]}
+
+    def test_http_403_with_errors_payload_logged(self):
+        resp = MagicMock(status_code=403)
+        resp.json.return_value = {
+            "errors": [
+                {
+                    "message": "The AniList API has been temporarily disabled due to severe stability issues.",
+                    "status": 403,
+                }
+            ]
+        }
+        with (
+            patch("renamer.providers.anilist._get_shared_session") as sess,
+            patch("renamer.providers.anilist.log.warning") as mock_warn,
+        ):
+            sess.return_value.post.return_value = resp
+            f = AniListFetcher()
+            assert f._gql(f.SERIES_QUERY, {"search": "test"}) is None
+            mock_warn.assert_called()
+            # Verify the warning logged the 403 and the error payload message
+            warning_msg = mock_warn.call_args[0][0] % mock_warn.call_args[0][1:]
+            assert "AniList HTTP 403" in warning_msg
+            assert "The AniList API has been temporarily disabled" in warning_msg
 
 
 # ---------------------------------------------------------------------------

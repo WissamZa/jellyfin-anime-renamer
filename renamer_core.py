@@ -646,6 +646,17 @@ class AniListFetcher(EpisodeFetcher):
     name = "AniList"
     URL = "https://graphql.anilist.co"
 
+    DEFAULT_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Origin": "https://anilist.co",
+        "Referer": "https://anilist.co/",
+        "Accept": "application/json",
+    }
+
     # Fetches: romaji/english/native titles + episode count
     SERIES_QUERY = """
     query ($id: Int, $search: String) {
@@ -692,19 +703,32 @@ class AniListFetcher(EpisodeFetcher):
     }
     """
 
-    def __init__(self, anime_id: int | None = None):
+    def __init__(self, anime_id: int | None = None, token: str | None = None):
         self._id = anime_id
+        self._token = token or os.getenv("ANILIST_TOKEN", "")
 
     def _gql(self, query: str, variables: dict) -> dict | None:
+        headers = dict(self.DEFAULT_HEADERS)
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         try:
             r = requests.post(
                 self.URL,
                 json={"query": query, "variables": variables},
                 timeout=15,
+                headers=headers,
             )
             if r.status_code == 200:
-                return r.json().get("data", {}).get("Media")
-            log.warning("AniList HTTP %s", r.status_code)
+                data = r.json().get("data", {})
+                return data.get("Media") or data.get("Page") if isinstance(data, dict) else None
+            err_msg = ""
+            try:
+                err_list = r.json().get("errors") or []
+                if err_list:
+                    err_msg = ": " + "; ".join(e.get("message", "") for e in err_list if e.get("message"))
+            except Exception:
+                pass
+            log.warning("AniList HTTP %s%s", r.status_code, err_msg)
         except requests.exceptions.RequestException as e:
             log.error("AniList request failed: %s", e)
         return None

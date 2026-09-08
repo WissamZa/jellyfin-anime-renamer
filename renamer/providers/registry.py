@@ -179,13 +179,15 @@ def _tmdb_multi_search(name: str, cfg: Config, limit: int = 10) -> list[dict]:
 def _anilist_factory(cfg: Config) -> EpisodeFetcher:
     from renamer.providers.anilist import AniListFetcher
 
-    return AniListFetcher(cfg.anilist_id)
+    token = getattr(cfg, "anilist_token", "")
+    return AniListFetcher(cfg.anilist_id, token=token)
 
 
 def _anilist_search(name: str, cfg: Config) -> SeriesSearchResult | None:
     from renamer.providers.anilist import AniListFetcher
 
-    results = AniListFetcher().search(name, limit=1)
+    token = getattr(cfg, "anilist_token", "")
+    results = AniListFetcher(token=token).search(name, limit=1)
     if not results:
         return None
     m = results[0]
@@ -201,7 +203,9 @@ def _anilist_search(name: str, cfg: Config) -> SeriesSearchResult | None:
 def _anilist_multi_search(name: str, cfg: Config, limit: int = 10) -> list[dict]:
     from renamer.providers.anilist import AniListFetcher
 
-    return AniListFetcher().to_search_dicts(AniListFetcher().search(name, limit=limit))
+    token = getattr(cfg, "anilist_token", "")
+    fetcher = AniListFetcher(token=token)
+    return fetcher.to_search_dicts(fetcher.search(name, limit=limit))
 
 
 def _kitsu_factory(cfg: Config) -> EpisodeFetcher:

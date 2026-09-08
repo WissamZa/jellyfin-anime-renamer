@@ -92,6 +92,7 @@ def _main_menu_options() -> list[tuple[str, str]]:
         ("[Organize] Hash-scan & organize mixed anime files  -->", "hash_organize"),
         ("[Scan] Scan folder — pick & rename multiple series  -->", "multi_series"),
         ("[Folders] Rename folder names using TMDB  -->", "rename_folders"),
+        ("[NFO] Create tvshow.nfo metadata file(s)  -->", "nfo_menu"),
         ("[Navigate] Change to a subfolder  -->", "navigate"),
         ("[Backup] Anime Database  -->", "submenu_backup"),
         ("[Configure] Provider & Series Identity  -->", "submenu_identity"),
@@ -128,6 +129,8 @@ def _utilities_menu_options() -> list[tuple[str, str]]:
         ("Set folder icon for current series", "set_icon"),
         ("Set folder icons for ALL series (batch)", "batch_set_icons"),
         ("Remove folder icons (batch)", "batch_remove_icons"),
+        ("Create tvshow.nfo for current series", "create_nfo"),
+        ("Create tvshow.nfo for ALL series (batch)", "batch_create_nfo"),
         ("Strip cover images from MKV files (batch)", "strip_covers"),
         ("<-- Back to main menu", "back"),
     ]
@@ -840,6 +843,10 @@ def run_utilities_submenu(cfg: Config, renamer: AnimeRenamer) -> None:
             menus.batch_set_icons(cfg)
         elif action == "batch_remove_icons":
             menus.batch_remove_icons(cfg)
+        elif action == "create_nfo":
+            menus.create_nfo_current_folder(cfg)
+        elif action == "batch_create_nfo":
+            menus.batch_create_nfo(cfg)
         elif action == "strip_covers":
             run_strip_covers_menu(cfg)
 
@@ -1001,6 +1008,24 @@ def main() -> None:
         "--batch-icons",
         action="store_true",
         help="Set folder icons for ALL series subfolders under MEDIA_DIR",
+    )
+    # ── tvshow.nfo metadata generation ──────────────────────
+    parser.add_argument(
+        "--create-nfo",
+        "--nfo",
+        action="store_true",
+        dest="create_nfo",
+        help="Generate tvshow.nfo file for the current series folder",
+    )
+    parser.add_argument(
+        "--batch-nfo",
+        action="store_true",
+        help="Generate tvshow.nfo files for ALL anime subfolders under MEDIA_DIR",
+    )
+    parser.add_argument(
+        "--no-overwrite-nfo",
+        action="store_true",
+        help="Do not overwrite existing tvshow.nfo files when running --create-nfo or --batch-nfo",
     )
     # ── Hash-based identification ────────────────────────────
     parser.add_argument(
@@ -1194,6 +1219,18 @@ def main() -> None:
         menus.batch_set_icons(cfg)
         return
 
+    # Non-interactive: create NFO for current series
+    if getattr(args, "create_nfo", False):
+        print(BANNER)
+        menus.create_nfo_current_folder(cfg, overwrite=not args.no_overwrite_nfo)
+        return
+
+    # Non-interactive: batch create NFO for all series
+    if getattr(args, "batch_nfo", False):
+        print(BANNER)
+        menus.batch_create_nfo(cfg, overwrite=not args.no_overwrite_nfo)
+        return
+
     print(BANNER)
 
     while True:
@@ -1231,6 +1268,8 @@ def main() -> None:
             run_multi_series_menu(cfg)
         elif choice == "rename_folders":
             run_rename_folders_menu(cfg)
+        elif choice == "nfo_menu":
+            menus.run_nfo_menu(cfg)
         elif choice == "navigate":
             menus.navigate_to_folder(cfg, renamer_obj)
         elif choice == "submenu_backup":
